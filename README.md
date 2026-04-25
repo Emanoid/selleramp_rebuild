@@ -234,6 +234,25 @@ pytest -q
   `--variations N` to also fetch the parent and siblings.
 - **No own-inventory awareness.** Doesn't factor stock you already hold.
 
+## Packaging
+
+To build the desktop app for end users (no Python required on their side),
+see `USER_GUIDE.md`. Quick commands:
+
+```bash
+# Local Mac build (writes dist/sa-rebuild.app):
+packaging/build-mac.sh
+
+# Local Windows build (run from cmd.exe in repo root):
+packaging\build-windows.bat
+```
+
+The GitHub Actions workflow at `.github/workflows/release.yml` builds both
+Mac and Windows binaries automatically when you push a `vX.Y.Z` tag, and
+attaches them to the GitHub Release. Workflow only runs from the **default
+branch** — make sure your default branch contains `release.yml` and
+`sa-rebuild.spec`.
+
 ## Layout
 
 ```

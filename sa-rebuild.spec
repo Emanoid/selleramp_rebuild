@@ -1,6 +1,6 @@
 # PyInstaller spec — builds a single-binary desktop app wrapping the
-# Streamlit UI. Use the build scripts (`build/build-mac.sh`,
-# `build\build-windows.bat`) which run `pyinstaller sa-rebuild.spec`.
+# Streamlit UI. Use the build scripts (`packaging/build-mac.sh`,
+# `packaging\build-windows.bat`) which run `pyinstaller sa-rebuild.spec`.
 #
 # The tricky bits handled here:
 #   - Streamlit, keepa, pandas all have hidden imports + data files.
