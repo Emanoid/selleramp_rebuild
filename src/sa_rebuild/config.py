@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Optional
 
 import yaml
 from dotenv import load_dotenv
@@ -77,13 +77,23 @@ class AppConfig(BaseModel):
     keepa_api_key: str = ""
 
     @classmethod
-    def load(cls, config_path: Path | str = "config.yaml") -> "AppConfig":
+    def load(cls, config_path: Path | str | None = None) -> "AppConfig":
+        """Load config.yaml from either an explicit path, the bundled binary,
+        ./config.yaml in the working dir, or fall through to defaults.
+
+        Resolves Keepa key from ~/.sa-rebuild/settings.json first, then
+        KEEPA_API_KEY env var, then .env in the working dir.
+        """
+        from .paths import bundled_config_yaml, get_keepa_api_key
+
         load_dotenv()
-        path = Path(config_path)
+        path: Optional[Path] = Path(config_path) if config_path else None
+        if path is None or not path.exists():
+            path = bundled_config_yaml()
         data: dict = {}
-        if path.exists():
+        if path and path.exists():
             with path.open() as f:
                 data = yaml.safe_load(f) or {}
         cfg = cls(**data)
-        cfg.keepa_api_key = os.environ.get("KEEPA_API_KEY", "")
+        cfg.keepa_api_key = get_keepa_api_key() or ""
         return cfg

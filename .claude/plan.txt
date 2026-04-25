@@ -272,3 +272,16 @@
  - src/sa_rebuild/analytics/pricing.py — recommended sell price
  - config.yaml — fee profile + thresholds mirroring the screenshot
  - tests/test_fees.py — parity guardrail
+
+
+
+  1. Run build/build-mac.sh locally to confirm the bundle builds on your machine — 
+  first time will surface any missing PyInstaller hidden imports. The spec already
+  collects streamlit, keepa, pandas, etc., but exotic packages sometimes need      
+  additions.                                                    
+  2. Push to GitHub once with workflow_dispatch (via Actions → "Build and release
+  desktop binaries" → "Run workflow") to validate Mac+Windows runners produce zips 
+  before you tag a real release.
+  3. First-launch warnings are documented in USER_GUIDE.md (Mac Gatekeeper         
+  right-click→Open, Windows SmartScreen "More info → Run anyway"). Without paid    
+  signing certs these are unavoidable for unsigned tools.
