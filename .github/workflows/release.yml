@@ -42,11 +42,11 @@ jobs:
       - name: Install build deps
         run: |
           python -m pip install --upgrade pip wheel
-          pip install -e .
+          pip install -e ".[dev]"
           pip install streamlit pyinstaller
 
       - name: Run unit tests
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Build with PyInstaller
         run: pyinstaller --noconfirm --distpath dist --workpath build/pyi_work sa-rebuild.spec
