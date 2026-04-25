@@ -1,11 +1,145 @@
 # sa-rebuild — SellerAmp-style FBA Sourcing Calculator (Keepa-only)
 
-A Python CLI that reads a CSV of UPCs and/or ASINs + wholesale costs and
-produces a per-row viability report (recommended sell price, fees, ROI,
-monthly sales, dominance, storefront link, Buy/Caution/Skip label, optional
-sibling-variation analysis) using only your Keepa Pro key.
+A desktop app (also a Python CLI) that reads a CSV of UPCs and/or ASINs + wholesale
+costs and produces a per-row viability report — recommended sell price, fees,
+ROI, monthly sales, dominance, storefront link, Buy/Caution/Skip label,
+optional sibling-variation analysis — using only your Keepa Pro key.
 
 Output mirrors your SellerAmp "FBA" profile (US, FBA, New only).
+
+---
+
+## For non-developers — Download and run the desktop app
+
+You don't need to install Python or know any code. You download one file,
+double-click it, use it from your browser. **Full step-by-step screenshots
+and troubleshooting are in [`USER_GUIDE.md`](USER_GUIDE.md).** Quick version:
+
+### 1. Get your Keepa API key
+
+Sign in at https://keepa.com → "API access" → copy the **Private API access
+key** (a long random string). You'll paste it into the app on first launch.
+
+### 2. Download the binary
+
+Go to the **[Releases page](../../releases)** of this repo and grab the
+latest:
+
+- **Mac users** → download `sa-rebuild-mac.zip`
+- **Windows users** → download `sa-rebuild-windows.zip`
+
+> If you don't see any releases, the maintainer hasn't tagged one yet. See
+> the [Releasing](#releasing-trigger-the-build) section below — it takes
+> ~10 minutes from a single tag push.
+
+### 3. Run it
+
+**macOS**
+
+1. Double-click `sa-rebuild-mac.zip` to unzip → you'll get `sa-rebuild.app`.
+2. Drag it into your **Applications** folder.
+3. The first time you open it, macOS will warn it's from an unidentified
+   developer. **Right-click** the app → **Open** → click **Open** in the
+   dialog. (One-time only — after that, normal double-click works.)
+
+**Windows**
+
+1. Right-click `sa-rebuild-windows.zip` → **Extract All…**.
+2. Open the extracted folder, double-click `sa-rebuild.exe`.
+3. Windows SmartScreen may say "Windows protected your PC." Click
+   **More info** → **Run anyway**. (One-time only.)
+
+### 4. Use the app
+
+- A small terminal window opens (don't close it — that's the engine).
+- Your browser auto-opens to `http://127.0.0.1:<port>` after a few seconds.
+- In the **left sidebar**, paste your Keepa key. It saves automatically.
+- Click **Download CSV template**, fill in your products, save as CSV.
+- **Drag the CSV** onto the upload box.
+- Click **Start run**. Watch live progress. Download the report when done.
+
+When you're finished, close the terminal window to shut the app down.
+
+### 5. Where your data lives (all local, never uploaded)
+
+- **Mac:** `~/.sa-rebuild/`
+- **Windows:** `C:\Users\<you>\.sa-rebuild\`
+
+Inside: `settings.json` (your key), `cache/`, `state/`, `output/`, `input/`.
+Safe to delete `cache/` to reclaim disk; **don't** delete `settings.json`
+unless you want to re-enter your key.
+
+For the long form (Gatekeeper bypass, troubleshooting, label meanings,
+running on a schedule), read [`USER_GUIDE.md`](USER_GUIDE.md).
+
+---
+
+<a name="releasing-trigger-the-build"></a>
+## Releasing — trigger the build that produces the binaries
+
+The Mac and Windows binaries are built **automatically by GitHub Actions** —
+you don't need a Mac or Windows machine yourself to ship them. Two paths:
+
+### Path A — Tag a release (the normal way)
+
+```bash
+# from the repo root, on the master branch:
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+GitHub Actions then:
+
+1. Spins up a macOS runner and a Windows runner (free for public repos).
+2. Runs the unit tests on both (fails fast if anything broke).
+3. Builds the bundle with PyInstaller on each.
+4. Zips the result and **attaches `sa-rebuild-mac.zip` and
+   `sa-rebuild-windows.zip` to the v0.1.0 Release page** under
+   "Releases" on your repo home.
+
+End users grab them from `https://github.com/<you>/<repo>/releases/latest`.
+
+Total time: ~10–15 minutes from tag push to binaries downloadable.
+
+### Path B — Manual build without tagging (dry run)
+
+If you want to confirm the build works before tagging:
+
+1. Go to your repo's **Actions** tab on GitHub.
+2. Click **Build and release desktop binaries** in the left list.
+3. Click **Run workflow** → choose `master` → click the green button.
+4. After it finishes (~10 min), click into the run and download
+   `sa-rebuild-mac.zip` / `sa-rebuild-windows.zip` from the **Artifacts**
+   section at the bottom. (Workflow-dispatch artifacts aren't published as
+   a Release — they're only available to repo collaborators.)
+
+> If you don't see the workflow in the Actions tab, the workflow file
+> (`.github/workflows/release.yml`) isn't on your **default branch** yet.
+> Merge it from `working` to `master` (or whichever branch is default).
+
+### Building locally for development (advanced)
+
+You don't need this unless you're debugging the bundling itself.
+
+```bash
+# Mac:
+packaging/build-mac.sh
+# → produces dist/sa-rebuild.app
+
+# Windows (run from cmd.exe in repo root):
+packaging\build-windows.bat
+# → produces dist\sa-rebuild\sa-rebuild.exe
+
+# Cross-platform: just run the Streamlit UI from source, no bundling:
+streamlit run src/sa_rebuild/web/app.py
+```
+
+---
+
+## For developers — CLI / library use
+
+Everything below is for developers who want to run the analysis from the
+command line or extend the codebase.
 
 ## Token reality
 
@@ -233,25 +367,6 @@ pytest -q
   decisions, but differs from SellerAmp's default headline numbers. Use
   `--variations N` to also fetch the parent and siblings.
 - **No own-inventory awareness.** Doesn't factor stock you already hold.
-
-## Packaging
-
-To build the desktop app for end users (no Python required on their side),
-see `USER_GUIDE.md`. Quick commands:
-
-```bash
-# Local Mac build (writes dist/sa-rebuild.app):
-packaging/build-mac.sh
-
-# Local Windows build (run from cmd.exe in repo root):
-packaging\build-windows.bat
-```
-
-The GitHub Actions workflow at `.github/workflows/release.yml` builds both
-Mac and Windows binaries automatically when you push a `vX.Y.Z` tag, and
-attaches them to the GitHub Release. Workflow only runs from the **default
-branch** — make sure your default branch contains `release.yml` and
-`sa-rebuild.spec`.
 
 ## Layout
 
