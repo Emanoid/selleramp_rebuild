@@ -13,21 +13,13 @@ from rich.table import Table
 from . import state as state_mod
 from .cache import Cache
 from .config import AppConfig
-from .csv_io import ReportWriter, read_input
-from .keepa_client import KeepaClient, TokensExhausted
+from .csv_io import read_input
 from .logging_setup import setup as setup_logging
-from .report import build_row
-from .token_bucket import TokenBucket
+from .paths import cache_dir, output_dir
+from .runner import iter_process
 
 app = typer.Typer(add_completion=False, help="SellerAmp-style FBA sourcing calculator (Keepa).")
 console = Console()
-
-
-def _build_client(cfg: AppConfig) -> tuple[KeepaClient, Cache, TokenBucket]:
-    cache = Cache("cache/keepa.sqlite")
-    bucket = TokenBucket(refill_rate_per_min=1.0)
-    client = KeepaClient(cfg, cache, bucket)
-    return client, cache, bucket
 
 
 def _process(
@@ -37,53 +29,24 @@ def _process(
     include_descriptions: bool,
     variations_fetch_max: int,
 ) -> int:
-    log = setup_logging("INFO")
-    client, cache, bucket = _build_client(cfg)
-    fetch_asin = client.fetch_by_asin
-    try:
-        with ReportWriter(rs.output_csv, include_descriptions=include_descriptions) as writer:
-            remaining = list(rs.remaining_row_ids)
-            for i, row_id in enumerate(remaining, start=1):
-                in_row = inputs_by_row_id.get(row_id)
-                if not in_row:
-                    state_mod.mark_error(rs, row_id, "?", "input", "missing input row")
-                    continue
-
-                key = in_row.lookup_key
-                kind = "asin" if in_row.lookup_is_asin else "upc"
-                console.log(
-                    f"[{rs.rows_done + 1}/{rs.rows_total}] row#{row_id} {kind}={key} "
-                    f"cost=${in_row.cost:.2f} tokens~{client.tokens_left()}"
-                )
-
-                try:
-                    if in_row.lookup_is_asin:
-                        product = client.fetch_by_asin(key)
-                    else:
-                        product = client.fetch_by_upc(key)
-                except TokensExhausted as e:
-                    log.warning(str(e))
-                    console.print(
-                        f"[yellow]Pausing run.[/yellow] {len(remaining) - i + 1} rows remain. "
-                        f"Resume with: [bold]sa-rebuild resume[/bold]"
-                    )
-                    return 0
-                except Exception as e:
-                    log.exception("fetch failed %s=%s", kind, key)
-                    state_mod.mark_error(rs, row_id, key, "fetch", repr(e))
-                    continue
-
-                row = build_row(
-                    in_row, product, cfg,
-                    fetch_asin=fetch_asin,
-                    variations_fetch_max=variations_fetch_max,
-                )
-                writer.write(row)
-                state_mod.mark_done(rs, row_id, client.tokens_left())
-                time.sleep(0.05)
-    finally:
-        cache.close()
-    console.print(f"[green]Run complete.[/green] {rs.rows_done}/{rs.rows_total} processed.")
+    setup_logging("INFO")
+    for ev in iter_process(
+        cfg, rs, inputs_by_row_id,
+        include_descriptions=include_descriptions,
+        variations_fetch_max=variations_fetch_max,
+    ):
+        if ev.kind == "row_done":
+            console.log(
+                f"[{ev.rows_done}/{ev.rows_total}] {ev.last_message} | tokens~{ev.tokens_left}"
+            )
+        elif ev.kind == "row_error":
+            console.log(f"[red]error[/red] {ev.last_message}")
+        elif ev.kind == "paused":
+            console.print(f"[yellow]{ev.last_message}[/yellow]")
+            console.print("Resume with: [bold]sa-rebuild resume[/bold]")
+            return 0
+        elif ev.kind == "finished":
+            console.print(f"[green]{ev.last_message}[/green]")
     return 0
 
 
@@ -109,7 +72,7 @@ def run(
 
     if output is None:
         ts = time.strftime("%Y%m%dT%H%M%S")
-        output = Path("output") / f"report_{ts}.csv"
+        output = output_dir() / f"report_{ts}.csv"
 
     rows = read_input(input)
     if not rows:
@@ -188,7 +151,7 @@ app.add_typer(cache_app, name="cache")
 @cache_app.command("clear")
 def cache_clear(older_than_hours: int = typer.Option(0, "--older-than-hours")):
     """Clear cache entries older than N hours (default: all expired)."""
-    cache = Cache("cache/keepa.sqlite")
+    cache = Cache(cache_dir() / "keepa.sqlite")
     removed = cache.clear_older_than(older_than_hours * 3600)
     cache.close()
     console.print(f"Removed {removed} cache entries.")

@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
-STATE_DIR = Path("state")
+from .paths import state_dir as _state_dir
+
+STATE_DIR = _state_dir()
 LAST_RUN_POINTER = STATE_DIR / "last_run.json"
 
 
