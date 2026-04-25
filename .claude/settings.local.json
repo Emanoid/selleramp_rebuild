@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch",
+      "WebSearch",
+      "ReadFile",
+      "WriteFile",
+      "EditFile",
+      "Grep",
+      "Glob",
+      "ListDirectory",
+      "RunCommand",
+      "ExecuteCommand",
+      "Shell",
+      "Bash",
+      "Bash(python3 -c \"import pydantic; print\\('pydantic', pydantic.VERSION\\)\")"
+    ]
+  }
+}

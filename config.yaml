@@ -1,0 +1,113 @@
+# SellerAmp-parity config — mirrors the user's "FBA" profile.
+# Edit values here to retune without touching code.
+
+marketplace:
+  domain: US                # Keepa domain string ("US", "GB", "CA"...)
+  amazon_seller_id: ATVPDKIKX0DER
+
+# Keepa fetch parameters
+keepa:
+  stats_days: 180
+  offers: 20
+  history: true
+  rating: true
+  cache_ttl_hours: 24
+  expected_token_cost: 8     # conservative; client adjusts using actual response
+
+# Throttling — when predicted wait exceeds this, checkpoint and exit gracefully.
+runtime:
+  max_wait_minutes: 30
+
+# Fee profile (mirrors SellerAmp screenshot)
+fees:
+  inbound_per_lb_usd: 0.80
+  misc_pct: 0.0663            # 6.63%
+  prep_flat_usd: 0.0
+  misc_flat_usd: 0.0
+  # Referral % resolution: config override wins over Keepa's value (lets you
+  # calibrate against SellerAmp). Default applies when neither is set.
+  referral_default_pct: 0.15
+  referral_overrides_by_root_category:
+    Grocery: 0.08
+    "Grocery & Gourmet Food": 0.08
+    Electronics: 0.08
+    "Cell Phones & Accessories": 0.08
+    "Clothing, Shoes & Jewelry": 0.17    # Amazon's apparel rate >$15
+    Health: 0.15
+    Beauty: 0.15
+
+# Pricing recommendation thresholds (volatility = stddev/mean of buy-box price, 90d)
+pricing:
+  cv_stable: 0.05
+  cv_moderate: 0.15
+
+# Competition / dominance
+competition:
+  amazon_dominance_pct: 0.70
+  brand_dominance_pct: 0.60
+  brand_name_fuzz_threshold: 85   # rapidfuzz partial_ratio
+  amazon_dominance_window_days: 90
+  top_buybox_window_days: 30
+
+# Viability thresholds (filters)
+viability:
+  min_profit_usd: 1.00
+  min_roi_pct: 0.30
+  max_bsr_pct: 0.02              # 2%
+  max_fba_seller_count: 15        # caution-flag above this
+
+# Variation analysis (opt-in: each sibling fetched costs ~7 tokens).
+# CLI flag --variations N overrides fetch_max.
+variations:
+  fetch_max: 0                     # 0 = disabled; e.g. 20 = fetch up to 20 siblings per parent
+  max_seller_count: 10             # sibling counts as viable if total live sellers < this
+  buy_box_min_ratio: 1.0           # sibling buy box must be >= ratio × main recommended_sell_price
+
+# Approximate US Amazon category sizes used to compute BSR percentile.
+# bsr_pct uses the LEAF category from Keepa's categoryTree first (matches
+# SellerAmp behavior), falling back to root if the leaf isn't listed here.
+# Update from Keepa's category browser when these drift. Add leaves you source
+# from often (a few common ones are seeded below — most leaves not seeded
+# yield bsr_pct=None, which means the row is reported but skipped from the
+# slow-seller filter rather than mis-classified).
+category_sizes:
+  # Roots
+  "Toys & Games": 7900000
+  "Home & Kitchen": 28000000
+  "Electronics": 13000000
+  "Beauty & Personal Care": 8500000
+  "Health & Household": 5800000
+  "Grocery & Gourmet Food": 1900000
+  "Office Products": 6500000
+  "Pet Supplies": 5500000
+  "Sports & Outdoors": 25000000
+  "Patio, Lawn & Garden": 9500000
+  "Baby Products": 1900000
+  "Industrial & Scientific": 14000000
+  "Tools & Home Improvement": 17000000
+  "Automotive": 27000000
+  "Clothing, Shoes & Jewelry": 175000000
+  "Books": 65000000
+  "Video Games": 600000
+  "Movies & TV": 1200000
+  "Cell Phones & Accessories": 9500000
+  "Arts, Crafts & Sewing": 8000000
+  "Musical Instruments": 1300000
+  # Common leaves (seed — extend as you source from new categories)
+  "Mules & Clogs": 1500000
+  "Sneakers": 2200000
+  "Boots": 1900000
+  "Sandals": 1700000
+  "Earbud & In-Ear Headphones": 110000
+  "Action Figures": 240000
+  "Building Toys": 380000
+  "Board Games": 220000
+  "Card Games": 180000
+  "Coffee, Tea & Espresso": 170000
+  "Vitamins, Minerals & Supplements": 180000
+  "Skin Care": 320000
+  "Hair Care": 220000
+  "Diapers": 9000
+  "Baby Bottle Nipples": 5000
+  "Pet Food": 65000
+  "Wireless Phone Accessories": 250000

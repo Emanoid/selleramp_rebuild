@@ -1,0 +1,274 @@
+ Here is Claude's plan:                                                                           
+╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+ SellerAmp-style FBA Sourcing Calculator (Python + Keepa)                                         
+                                                        
+ Context                                                                                        
+
+ Goal: Build a Python CLI that takes a CSV of upc, cost (plus optional weight) and produces a
+ per-UPC viability report comparable to SellerAmp's "is-this-product-worth-buying" output, using
+ only the user's Keepa Pro API access.
+
+ Why: The user already has SellerAmp (no API) and a Keepa Pro key. Keepa exposes every data point
+  needed (ASIN-by-UPC, full price/buy-box history, offers, fees, sales estimates, BSR), so the
+ app can replicate SellerAmp's filter pipeline locally and run automatically over a sourcing
+ list.
+
+ Hard constraint: Keepa Pro plan = 60-token bucket, refill rate 1 token/min. A full product fetch
+  (history + stats + offers + rating) costs ~6–8 tokens. So we can burst ~7–10 products
+ instantly, then steady-state ~7–8 minutes/product. A 100-row CSV ≈ 11–13 hours wall time. The
+ whole architecture is shaped around this: aggressive caching, mid-run resume, and overnight
+ batch runs.
+
+ Marketplace: US (amazon.com, Keepa domain 1, Amazon seller ID ATVPDKIKX0DER).
+
+ Fee profile (mirrors the user's SellerAmp "FBA" profile screenshot — config-driven so it can be
+ tuned):
+ - Inbound FBA Shipping: $0.80 / lb (multiplied by item weight)
+ - Misc Fee %: 6.63% of sell price
+ - Prep / Misc flat: $0
+ - Storage: 0 months (ignored)
+ - Min profit threshold: $1.00, Min ROI: 30%, Max BSR: 2%
+ - Analysis condition: New only
+
+ Architecture
+
+ selleramp_rebuild/
+ ├── pyproject.toml
+ ├── .env                          # KEEPA_API_KEY=...
+ ├── config.yaml                   # fee profile + thresholds (mirrors SellerAmp screenshot)
+ ├── input/                        # user-supplied CSVs
+ ├── output/                       # report_<timestamp>.csv
+ ├── cache/keepa.sqlite            # response cache (24h TTL configurable)
+ ├── state/run_<id>.json           # resume checkpoint
+ └── src/sa_rebuild/
+     ├── __main__.py               # `python -m sa_rebuild` entry
+     ├── cli.py                    # typer commands: run, status, cache
+     ├── config.py                 # pydantic settings, loads config.yaml + .env
+     ├── csv_io.py                 # input parsing, output writing
+     ├── keepa_client.py           # wrapper around `keepa` PyPI lib + cache + bucket gate
+     ├── token_bucket.py           # tracks tokensLeft from API responses, gates calls
+     ├── cache.py                  # sqlite key/value with TTL
+     ├── upc_lookup.py             # UPC → ASIN
+     ├── product_data.py           # full product fetch (stats=180, history, offers=20)
+     ├── analytics/
+     │   ├── pricing.py            # 30d avg buy box, volatility, recommended sell price
+     │   ├── competition.py        # FBA seller count, dominance (Amazon vs brand)
+     │   ├── sales.py              # monthly sales + BSR percentile
+     │   ├── fees.py               # referral + FBA fulfillment + inbound + misc%
+     │   └── viability.py          # profit, ROI, pass/fail vs thresholds
+     ├── report.py                 # assemble output row
+     └── logging_setup.py
+ └── tests/
+     ├── fixtures/                 # vcrpy cassettes + sample CSVs
+     ├── test_fees.py              # parity vs SellerAmp profile
+     ├── test_pricing.py
+     ├── test_competition.py
+     └── test_e2e.py               # 2-UPC cassette replay
+
+ Dependencies
+
+ - keepa (PyPI, MIT) — official-style Python wrapper. Reuse it; it already handles the Keepa
+ request schema, history-CSV decoding, and basic token-wait. We layer caching + persistence on
+ top.
+ - pydantic-settings, typer, pandas, python-dotenv, tenacity, rapidfuzz (brand-vs-seller fuzzy
+ match), pytest, vcrpy.
+
+ Algorithms
+
+ 1. UPC → ASIN
+
+ api.query(items=[upc], product_code_is_asin=False, domain="US", stats=180, history=True,
+ offers=20, rating=True) resolves the UPC and returns the full product payload in one call
+ (avoids a separate lookup-then-fetch round trip and saves tokens). Cache mapping upc → asin
+ permanently; cache full product blob with 24h TTL.
+
+ 2. Product data fields used
+
+ From the response we read:
+ - csv[3] = New (price history), csv[18] = Buy Box w/ shipping, csv[11] = New FBA, csv[16] = Buy
+ Box stats per seller
+ - stats.buyBoxPrice, stats.avg30, stats.avg90, stats.salesRankDrops30, stats.monthlySold
+ - offers[] (current): sellerId, isFBA, condition, stockCSV, offerCSV
+ - buyBoxSellerIdHistory (array of timestamp/sellerId pairs over full history)
+ - packageWeight, packageHeight/Length/Width, categoryTree, productGroup, brand, title
+ - fbaFees.pickAndPackFee, referralFeePercent (when Keepa returns them — preferred over our
+ table)
+
+ 3. Pricing — recommended sell price (analytics/pricing.py)
+
+ - 30d avg buy box: time-weighted mean from csv[18] over last 30d (or stats.avg30[18] shortcut).
+ - Volatility: coefficient of variation (stddev/mean) of buy-box price over last 90d.
+ - Current floor: cheapest currently-live FBA-New offer in offers[] (exclude used, exclude
+ warehouse-deals, exclude suppressed).
+ - Recommended price (rules in config, defaults below):
+
+ | Volatility (CV)   | Action
+ |
+ |-------------------|---------------------------------------------------------------------------
+ |
+ | < 0.05 (stable)   | match current_floor
+ |
+ | 0.05–0.15         | match current_floor (no undercut — undercutting starts a race)
+ |
+ | > 0.15 (volatile) | use min(current_floor, 25th-percentile of 30d buy box) to be conservative
+ |
+
+ - Always: recommended ≤ current_floor. If current_floor is missing (no live FBA-New offer), use
+ 30d avg buy box.
+
+ 4. Competition & dominance (analytics/competition.py)
+
+ - Amazon dominance: % of last 90 days where buy-box winner ID == ATVPDKIKX0DER. ≥ 70% → flag
+ amazon_dominant=True → emit "Skip — Amazon dominant".
+ - Brand dominance: If Amazon < 70% AND a single non-Amazon seller holds ≥ 60% of last-90d buy
+ box AND rapidfuzz.partial_ratio(brand, seller_name) ≥ 85 → flag brand_dominant=True
+ (low-confidence — heuristic, called out in notes).
+ - Top BB winner: most-frequent seller in last 30d of buyBoxSellerIdHistory; resolve display name
+  from offers[] payload (free) or seller endpoint cache.
+ - Active FBA-New competitor count: distinct sellers in current offers[] matching isFBA &&
+ condition==NEW.
+ - Stock signal: sum positive stock snapshots in stockCSV for top FBA sellers; emit "unknown"
+ when Keepa doesn't return stock (common).
+
+ 5. Sales velocity (analytics/sales.py)
+
+ - Primary: stats.monthlySold (Keepa's reflection of Amazon's "X+ bought" badge).
+ - Fallback: estimate from salesRankDrops30 (drops ≈ unit sales lower bound).
+ - BSR percentile: rank ÷ category size from categoryTree. Compare to max_bsr_pct=2.0 from
+ config; failing this fails competitive.
+
+ 6. Fees (analytics/fees.py)
+
+ - Referral fee: prefer Keepa's referralFeePercent. Fallback: YAML category→% table (default 15%,
+  with overrides for groceries 8%, electronics 8%, etc.).
+ - FBA fulfillment fee: prefer Keepa's fbaFees.pickAndPackFee. Fallback: tier table keyed by
+ dimensional + weight bucket (Small Standard / Large Standard / Small Oversize / etc.). Tables
+ live in YAML so the user can update when Amazon publishes new rates.
+ - Inbound shipping: weight_lbs × $0.80. weight_lbs from CSV column if present, else Keepa
+ packageWeight (g → lb conversion).
+ - Misc Fee %: sell_price × 0.0663.
+ - Prep + Misc flat: $0 (config).
+ - Total Amazon fees = referral + FBA fulfill + misc%.
+ - Net profit = sell − cost − total_fees − inbound − prep.
+ - ROI = net_profit ÷ (cost + inbound + prep).
+
+ 7. Viability label (analytics/viability.py)
+
+ Composite verdict per row:
+
+ ┌──────────────────────────────────────────────┬───────────────────────────────────┐
+ │                  Condition                   │               Label               │
+ ├──────────────────────────────────────────────┼───────────────────────────────────┤
+ │ amazon_dominant                              │ Skip — Amazon dominant            │
+ ├──────────────────────────────────────────────┼───────────────────────────────────┤
+ │ brand_dominant                               │ Skip — Brand dominant (heuristic) │
+ ├──────────────────────────────────────────────┼───────────────────────────────────┤
+ │ bsr_pct > 2                                  │ Skip — Slow seller                │
+ ├──────────────────────────────────────────────┼───────────────────────────────────┤
+ │ profit ≥ $1.00 AND ROI ≥ 30% AND competitive │ Buy                               │
+ ├──────────────────────────────────────────────┼───────────────────────────────────┤
+ │ profit > 0 AND competitive                   │ Caution — thin margin             │
+ ├──────────────────────────────────────────────┼───────────────────────────────────┤
+ │ else                                         │ Pass                              │
+ └──────────────────────────────────────────────┴───────────────────────────────────┘
+
+ 8. Token budget / throttling + resume (token_bucket.py + keepa_client.py + state.py)
+
+ Token gating
+ - After every Keepa call, the response includes tokensLeft and refillRate. Update local mirror.
+ - Before each call, if tokensLeft < expected_cost: sleep (expected_cost − tokensLeft) × 60s /
+ refillRate, then retry.
+ - Cache hits never spend tokens. Default TTL 24h; configurable.
+ - Live progress: X/Y done | tokens=N/60 | ETA HH:MM.
+
+ State persistence (durable, every-row write — required because tokens may expire mid-run)
+ - After every single processed row (success, skip, or error), atomically write
+ state/run_<id>.json:
+ {
+   "run_id": "...",
+   "input_csv": "...",
+   "output_csv": "...",
+   "started_at": "...",
+   "last_updated_at": "...",
+   "rows_total": 100,
+   "rows_done": 47,
+   "rows_remaining_upcs": ["045496..", ...],
+   "tokens_left_snapshot": 0,
+   "results": [ { /* full output row, identical schema to CSV */ }, ... ],
+   "errors": [ { "upc": "...", "stage": "...", "message": "..." } ]
+ }
+ - Atomic write = write to .tmp then os.replace() so a kill mid-write never corrupts the file.
+ - Also maintain a stable pointer file state/last_run.json (overwritten each row) that mirrors
+ the latest run's metadata — so a future session can find "where did we leave off" with zero
+ arguments.
+ - Append to the output CSV after every row too (not just at end), so the report is usable even
+ if the run aborts halfway.
+ - python -m sa_rebuild resume (no args) → reads state/last_run.json and continues. --resume <id>
+  for a specific older run.
+ - On startup of a resume, the in-progress UPCs are detected as the set difference between input
+ rows and results[].upc, so re-runs are idempotent.
+
+ Token-exhaustion behavior
+ - When the bucket empties and the predicted wait exceeds --max-wait-minutes (default 30), the
+ run gracefully checkpoints and exits with code 0 and a clear message ("paused, X UPCs remaining,
+  run resume later"). No babysitting needed.
+
+ 9. CSV schemas
+
+ Input (input/products.csv):
+ upc, cost, weight_lbs (optional), prep_cost (optional)
+
+ Output (output/report_<ts>.csv):
+ upc, asin, title, brand, category,
+ cost, weight_lbs, inbound_cost, prep_cost,
+ current_lowest_fba_new, buy_box_30d_avg, buy_box_volatility_cv,
+ recommended_sell_price,
+ referral_fee, fba_fulfillment_fee, misc_fee, total_fees,
+ estimated_profit, roi_pct,
+ monthly_sales, bsr, bsr_pct,
+ fba_seller_count, top_buybox_seller_name, top_buybox_seller_share_pct,
+ amazon_buybox_share_pct, amazon_dominant, brand_dominant, dominance_label,
+ storefront_url,            # https://www.amazon.com/dp/<asin>
+ viability_label, notes
+
+ 10. CLI
+
+ python -m sa_rebuild run --input input/list.csv --output output/report.csv [--resume <id>]
+ [--config config.yaml]
+ python -m sa_rebuild status                # token bucket + last-run progress
+ python -m sa_rebuild cache clear --older-than 7d
+
+ Risks & limitations (called out in README + report notes)
+
+ - Brand-dominance is heuristic — brand name vs seller-display-name fuzzy match. Always tagged
+ "low confidence" and shown alongside the share %, so the user can override.
+ - Keepa sales estimates are estimates, not Amazon ground truth.
+ - FBA fee tables drift — Amazon updates them; YAML lets the user patch without code changes.
+ Keepa's fbaFees.pickAndPackFee is preferred when present.
+ - Throughput is bound by the 1/min refill — for big lists, plan to run overnight; resume covers
+ crashes / network blips.
+ - No own-inventory awareness — cannot factor in stock the user already has. Out of scope for v1.
+
+ Verification
+
+ 1. Unit tests (offline, no API):
+   - test_fees.py — feed dimensions/weight/category fixtures; assert fee output equals known
+ SellerAmp values for a handful of real ASINs (user supplies expected numbers).
+   - test_pricing.py — synthetic price series → assert CV + recommended-price rules.
+   - test_competition.py — synthetic buyBoxSellerIdHistory → assert dominance scoring.
+ 2. Cassette integration test (vcrpy): record one real Keepa call for 2 ASINs, replay forever in
+ CI without spending tokens.
+ 3. Manual parity check: pick 5 ASINs the user has already analyzed in SellerAmp, run the tool,
+ diff every numeric column. Document deltas (especially fees) and tune YAML until they match
+ within tolerance.
+ 4. Smoke run: 3-row CSV end-to-end on real API, then a 20-row run to validate caching, resume
+ (kill mid-run, restart with --resume), and ETA accuracy.
+
+ Critical files to create
+
+ - src/sa_rebuild/keepa_client.py — token-aware wrapper, the throughput backbone
+ - src/sa_rebuild/analytics/fees.py — must match the SellerAmp FBA profile
+ - src/sa_rebuild/analytics/competition.py — Amazon/brand dominance logic
+ - src/sa_rebuild/analytics/pricing.py — recommended sell price
+ - config.yaml — fee profile + thresholds mirroring the screenshot
+ - tests/test_fees.py — parity guardrail

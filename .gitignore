@@ -1,0 +1,20 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+.pytest_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# runtime artifacts
+cache/*.sqlite
+cache/*.sqlite-*
+state/*.json
+output/*.csv
+input/*.csv
+!input/example.csv
+
+.DS_Store
