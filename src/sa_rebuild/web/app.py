@@ -75,20 +75,29 @@ def _ensure_session():
 def _start_run(
     cfg: AppConfig,
     input_path: Path,
-    output_path: Path,
+    output_path_base: Path,  # without the run-id suffix
     variations: int,
     include_descriptions: bool,
 ):
     ss = st.session_state
+    if ss.worker_thread is not None and ss.worker_thread.is_alive():
+        st.warning("A run is already in progress. Stop it before starting a new one.")
+        return
     rows = read_input(input_path)
     if not rows:
         st.error("No usable rows in the uploaded CSV.")
         return
     rs = state_mod.RunState.new(
         input_csv=str(input_path),
-        output_csv=str(output_path),
+        output_csv="",  # filled in below once we know the run_id
         row_ids=[r.row_id for r in rows],
     )
+    # Splice the run_id's random suffix into the output filename so two
+    # near-simultaneous Start clicks land on different files (collision-proof).
+    output_path = output_path_base.with_name(
+        output_path_base.stem + "_" + rs.run_id.split("-")[-1] + output_path_base.suffix
+    )
+    rs.output_csv = str(output_path)
     state_mod.save(rs)
     inputs_by_row_id = {r.row_id: r for r in rows}
     ss.run_id = rs.run_id
@@ -106,6 +115,7 @@ def _start_run(
             include_descriptions=include_descriptions,
             variations_fetch_max=variations,
             cancel_check=cancel.is_set,
+            is_resume=False,
         ):
             events_buf.append(ev)
 
@@ -114,12 +124,15 @@ def _start_run(
 
 
 def _resume_existing(cfg: AppConfig, variations: int, include_descriptions: bool) -> bool:
+    ss = st.session_state
+    if ss.worker_thread is not None and ss.worker_thread.is_alive():
+        st.warning("A run is already in progress.")
+        return False
     rs = state_mod.load_last()
     if rs is None or not rs.remaining_row_ids:
         return False
     rows = read_input(rs.input_csv)
     inputs_by_row_id = {r.row_id: r for r in rows}
-    ss = st.session_state
     ss.run_id = rs.run_id
     ss.output_path = rs.output_csv
     ss.started_at = time.time()
@@ -134,6 +147,7 @@ def _resume_existing(cfg: AppConfig, variations: int, include_descriptions: bool
             include_descriptions=include_descriptions,
             variations_fetch_max=variations,
             cancel_check=cancel.is_set,
+            is_resume=True,
         ):
             events_buf.append(ev)
 

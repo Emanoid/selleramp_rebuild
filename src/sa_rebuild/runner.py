@@ -57,6 +57,7 @@ def iter_process(
     include_descriptions: bool = True,
     variations_fetch_max: int = 0,
     cancel_check: Optional[Callable[[], bool]] = None,
+    is_resume: bool = False,
 ) -> Iterator[ProgressEvent]:
     """Drive the full run, yielding a ProgressEvent after each row.
 
@@ -85,14 +86,23 @@ def iter_process(
         )
 
     try:
-        with ReportWriter(rs.output_csv, include_descriptions=include_descriptions) as writer:
+        with ReportWriter(rs.output_csv, include_descriptions=include_descriptions,
+                          allow_resume=is_resume) as writer:
             yield _ev("start",
                       f"Run {rs.run_id} starting — {rs.rows_total - rs.rows_done} rows to process")
             remaining = list(rs.remaining_row_ids)
+            already_done = set(rs.completed_row_ids)
             for idx, row_id in enumerate(remaining, start=1):
                 if cancel_check and cancel_check():
                     yield _ev("paused", "Stopped by user. Resume any time.")
                     return
+                # Defensive dedup: never re-process a row that's already in completed_row_ids.
+                if row_id in already_done:
+                    log.info("skipping row#%s — already in completed_row_ids", row_id)
+                    if row_id in rs.remaining_row_ids:
+                        rs.remaining_row_ids.remove(row_id)
+                    state_mod.save(rs)
+                    continue
                 in_row = inputs_by_row_id.get(row_id)
                 if not in_row:
                     state_mod.mark_error(rs, row_id, "?", "input", "missing input row")

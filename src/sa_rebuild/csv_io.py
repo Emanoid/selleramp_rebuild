@@ -167,12 +167,24 @@ class ReportWriter:
 
     With include_descriptions=True (default), a column-help row is inserted
     immediately after the header on first write.
+
+    `allow_resume`: when True, opening an existing file appends to it (resume
+    semantics). When False (default), opening an existing file raises — this
+    catches the bug where two parallel runs land on the same timestamped
+    output path and silently double-write.
     """
 
-    def __init__(self, path: Path | str, include_descriptions: bool = True):
+    def __init__(self, path: Path | str, include_descriptions: bool = True,
+                 allow_resume: bool = False):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._fresh = not self.path.exists()
+        if not self._fresh and not allow_resume:
+            raise FileExistsError(
+                f"Refusing to append to existing report {self.path}. "
+                "Pass allow_resume=True to deliberately continue an interrupted run, "
+                "or use a unique output path."
+            )
         self._fh = self.path.open("a", newline="", encoding="utf-8")
         self._writer = csv.DictWriter(self._fh, fieldnames=REPORT_COLUMNS, extrasaction="ignore")
         if self._fresh:

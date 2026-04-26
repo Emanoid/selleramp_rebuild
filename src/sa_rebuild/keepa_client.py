@@ -104,6 +104,15 @@ class KeepaClient:
             results = self._query(items=[upc], product_code_is_asin=False)
         except Exception as e:
             log.error("keepa query failed upc=%s err=%s", upc, e)
+            # Keepa library raises bare RuntimeError("NOT_ENOUGH_TOKEN") when
+            # its own internal counter disagrees with ours. Convert to our
+            # token-exhaustion exception so the runner pauses (and resumes
+            # retrying this row) instead of treating it as a row-level fatal.
+            if "NOT_ENOUGH_TOKEN" in str(e):
+                raise TokensExhausted(
+                    f"Keepa reported NOT_ENOUGH_TOKEN. Local mirror says "
+                    f"{self.bucket.predicted_now()} tokens; will retry on resume."
+                ) from e
             raise
         self.last_fetch_seconds = time.time() - t0
         self.last_tokens_consumed = max(0, tokens_before - self.bucket.tokens_left)
@@ -125,7 +134,15 @@ class KeepaClient:
         tokens_before = self.bucket.predicted_now()
         self.last_wait_seconds = self._ensure_tokens(self.cfg.keepa.expected_token_cost)
         t0 = time.time()
-        results = self._query(items=[asin], product_code_is_asin=True)
+        try:
+            results = self._query(items=[asin], product_code_is_asin=True)
+        except Exception as e:
+            if "NOT_ENOUGH_TOKEN" in str(e):
+                raise TokensExhausted(
+                    f"Keepa reported NOT_ENOUGH_TOKEN. Local mirror says "
+                    f"{self.bucket.predicted_now()} tokens; will retry on resume."
+                ) from e
+            raise
         self.last_fetch_seconds = time.time() - t0
         self.last_tokens_consumed = max(0, tokens_before - self.bucket.tokens_left)
         product = results[0] if results else None
