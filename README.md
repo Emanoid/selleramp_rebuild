@@ -62,12 +62,37 @@ When you're finished, close the terminal window to shut the app down.
 
 ### 5. Where your data lives (all local, never uploaded)
 
+By default:
+
 - **Mac:** `~/.sa-rebuild/`
 - **Windows:** `C:\Users\<you>\.sa-rebuild\`
 
 Inside: `settings.json` (your key), `cache/`, `state/`, `output/`, `input/`.
 Safe to delete `cache/` to reclaim disk; **don't** delete `settings.json`
 unless you want to re-enter your key.
+
+### 6. Environment variables (advanced — usually leave alone)
+
+You can override defaults by setting these before launching the app:
+
+| Variable | What it does | Default |
+|---|---|---|
+| `KEEPA_API_KEY` | Skips the in-app key entry. Useful if you'd rather keep the key in your shell environment than in `settings.json`. The in-app field still wins if both are set. | (unset — read from `settings.json`) |
+| `SA_REBUILD_HOME` | Move the entire data folder somewhere else (external drive, cloud-sync folder, encrypted volume). The app stores cache/state/output/input/settings here. | `~/.sa-rebuild/` |
+
+**Portable mode** (no env var): create a folder named `sa-rebuild-data` next
+to the binary. The app uses that instead of the home folder. Good for
+running off a USB stick — everything stays on the stick.
+
+**How to set env vars:**
+
+- **Mac**: open Terminal and prefix the launch command, e.g.
+  ```bash
+  SA_REBUILD_HOME=~/Dropbox/sa-rebuild open /Applications/sa-rebuild.app
+  ```
+  For a permanent setting, add `export SA_REBUILD_HOME=...` to `~/.zshrc`.
+- **Windows**: Search "Environment Variables" → Edit user variables → New →
+  enter the name and value → OK. Restart `sa-rebuild.exe`.
 
 For the long form (Gatekeeper bypass, troubleshooting, label meanings,
 running on a schedule), read [`USER_GUIDE.md`](USER_GUIDE.md).
@@ -165,6 +190,13 @@ source .venv/bin/activate
 pip install -e .
 cp .env.example .env     # add your KEEPA_API_KEY
 ```
+
+### Recognized environment variables
+
+| Variable | What it does |
+|---|---|
+| `KEEPA_API_KEY` | Your Keepa Pro key. Read by `config.AppConfig.load()` if `~/.sa-rebuild/settings.json` doesn't have one. The `.env` file (via `python-dotenv`) is also auto-loaded. |
+| `SA_REBUILD_HOME` | Override the data folder (cache/state/output/input/settings live here). Defaults to `~/.sa-rebuild/`. Useful for tests, CI, sandboxed runs, or shipping the app to use a portable folder. |
 
 ## Input CSV
 
