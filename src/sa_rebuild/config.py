@@ -25,7 +25,10 @@ class KeepaCfg(BaseModel):
 
 
 class RuntimeCfg(BaseModel):
-    max_wait_minutes: int = 30
+    # Default 240 minutes ≈ 4 hours; effectively "sleep through token waits, don't
+    # auto-pause." Old default was 30, which forced manual Resume clicks once
+    # variation fetches stacked up. Override per-run via the sidebar slider.
+    max_wait_minutes: int = 240
 
 
 class FeesCfg(BaseModel):

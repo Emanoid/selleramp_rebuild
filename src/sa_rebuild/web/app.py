@@ -180,6 +180,19 @@ with st.sidebar:
     )
 
     st.divider()
+    st.subheader("Throttling")
+    max_wait_minutes = st.slider(
+        "Max wait per row (minutes)",
+        min_value=5, max_value=720, value=240, step=5,
+        help=(
+            "If a row needs longer than this for Keepa tokens to refill, the run "
+            "auto-pauses (you click Resume later). Default 240 (4 h) means most "
+            "rows sleep through. Lower it if you'd rather have manual pauses; "
+            "raise it if you want fully unattended runs."
+        ),
+    )
+
+    st.divider()
     st.caption(f"Data folder: `{app_home()}`")
 
 # ---- Top section: template + upload ----------------------------------------
@@ -220,6 +233,7 @@ if prior and prior.remaining_row_ids and not worker_running and ss.run_id != pri
             st.error("Enter your Keepa API key in the sidebar first.")
         else:
             cfg = AppConfig.load()
+            cfg.runtime.max_wait_minutes = max_wait_minutes
             if _resume_existing(cfg, variations, include_descriptions):
                 st.rerun()
 
@@ -236,6 +250,7 @@ if st.button("▶ Start run", type="primary", disabled=run_disabled):
         in_path.write_bytes(uploaded.getvalue())
         out_path = output_dir() / f"report_{ts}.csv"
         cfg = AppConfig.load()
+        cfg.runtime.max_wait_minutes = max_wait_minutes
         _start_run(cfg, in_path, out_path, variations, include_descriptions)
         st.rerun()
 
