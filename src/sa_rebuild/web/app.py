@@ -41,6 +41,19 @@ st.set_page_config(page_title="sa-rebuild — FBA Sourcing Calculator", layout="
 
 # ---------------------------------------------------------------------------- helpers
 
+def _fmt_duration(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "—"
+    s = int(round(seconds))
+    if s < 60:
+        return f"{s}s"
+    m, s = divmod(s, 60)
+    if m < 60:
+        return f"{m}m {s}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m}m"
+
+
 TEMPLATE_CSV = (
     "upc,asin,cost,weight_lbs,prep_cost\n"
     "028800127321,,8.91,0.73,0.00\n"
@@ -129,18 +142,46 @@ def _resume_existing(cfg: AppConfig, variations: int, include_descriptions: bool
     return True
 
 
+def _live_tokens(events: list[ProgressEvent]) -> tuple[int, float]:
+    """Extrapolate current token count from the latest event + elapsed time + refill rate.
+
+    Returns (predicted_tokens, refill_rate_per_min).
+    """
+    if not events:
+        return 0, 1.0
+    latest = events[-1]
+    elapsed_min = max(0.0, (time.time() - latest.timestamp) / 60.0)
+    refill = latest.refill_rate_per_min or 1.0
+    # Bucket size cap (Keepa Pro = 60). Anything larger gets clamped here only for
+    # display; the runner uses Keepa's actual response numbers.
+    return min(60, int(latest.tokens_left + elapsed_min * refill)), refill
+
+
+def _avg_tokens_per_row(events: list[ProgressEvent]) -> Optional[float]:
+    rows = [e for e in events if e.kind == "row_done" and not e.cache_hit]
+    if not rows:
+        return None
+    return sum(e.tokens_consumed for e in rows) / len(rows)
+
+
 def _eta_seconds(events: list[ProgressEvent], remaining: int) -> Optional[float]:
-    """Estimate seconds remaining from the rate of recent row_done events."""
-    done = [e for e in events if e.kind == "row_done"]
-    if len(done) < 2:
-        return None
-    # Use elapsed wallclock since first row_done as a proxy.
-    started = st.session_state.get("started_at") or time.time()
-    elapsed = time.time() - started
-    rate = len(done) / max(elapsed, 1.0)
-    if rate <= 0:
-        return None
-    return remaining / rate
+    """ETA based on token budget: remaining_rows * avg_tokens_per_row vs current tokens."""
+    if remaining <= 0:
+        return 0.0
+    avg = _avg_tokens_per_row(events)
+    if avg is None or avg <= 0:
+        # Pre-first-row fallback: rate-based
+        done = [e for e in events if e.kind == "row_done"]
+        if len(done) < 1:
+            return None
+        started = st.session_state.get("started_at") or time.time()
+        elapsed = time.time() - started
+        rate = len(done) / max(elapsed, 1.0)
+        return remaining / rate if rate > 0 else None
+    tokens_now, refill = _live_tokens(events)
+    tokens_needed = remaining * avg
+    deficit = max(0, tokens_needed - tokens_now)
+    return deficit * 60.0 / refill
 
 
 # ---------------------------------------------------------------------------- UI
@@ -265,14 +306,32 @@ if worker_running or events:
     latest = events[-1] if events else None
     rows_done = latest.rows_done if latest else 0
     rows_total = latest.rows_total if latest else 0
-    tokens_left = latest.tokens_left if latest else 0
     pct = (rows_done / rows_total) if rows_total else 0.0
 
+    tokens_now, refill = _live_tokens(events)
+    avg_tok = _avg_tokens_per_row(events)
+    eta = _eta_seconds(events, rows_total - rows_done) if worker_running else 0.0
+
+    # Aggregate stats across all events
+    done_events = [e for e in events if e.kind == "row_done"]
+    cache_hits = sum(1 for e in done_events if e.cache_hit)
+    total_tokens_used = sum(e.tokens_consumed for e in done_events)
+    total_wait_s = sum(e.wait_seconds for e in done_events)
+    total_row_s = sum(e.row_seconds for e in done_events)
+    error_count = sum(1 for e in events if e.kind == "row_error")
+
+    # Row 1: high-level
     cols = st.columns(4)
-    cols[0].metric("Rows done", f"{rows_done}/{rows_total}")
-    cols[1].metric("Tokens left", tokens_left)
-    eta = _eta_seconds(events, rows_total - rows_done) if worker_running else None
-    cols[2].metric("ETA", f"{eta/60:.0f} min" if eta else "—")
+    cols[0].metric("Rows done", f"{rows_done}/{rows_total}",
+                   delta=f"{error_count} errors" if error_count else None,
+                   delta_color="inverse")
+    cols[1].metric(
+        "Tokens (live)",
+        f"{tokens_now}/60",
+        delta=f"+{refill:.0f}/min refill",
+        delta_color="normal",
+    )
+    cols[2].metric("ETA", _fmt_duration(eta) if eta is not None else "—")
     last_label = "—"
     for ev in reversed(events):
         if ev.last_row and ev.last_row.get("viability_label"):
@@ -280,15 +339,26 @@ if worker_running or events:
             break
     cols[3].metric("Last verdict", last_label)
 
-    st.progress(pct, text=f"{int(pct*100)}% — {(latest.last_message if latest else '')[:120]}")
+    # Row 2: token economy
+    cols2 = st.columns(4)
+    cols2[0].metric("Tokens spent", total_tokens_used)
+    cols2[1].metric("Avg tokens/row",
+                    f"{avg_tok:.1f}" if avg_tok else "—",
+                    help="Excludes cache hits.")
+    cols2[2].metric("Cache hits", f"{cache_hits}/{len(done_events)}" if done_events else "0/0",
+                    help="Free fetches served from local 24h cache.")
+    cols2[3].metric("Total wait", _fmt_duration(total_wait_s),
+                    help="Cumulative time spent sleeping for token refill.")
+
+    st.progress(pct, text=f"{int(pct*100)}% — {(latest.last_message if latest else '')[:140]}")
 
     if st.button("⏹ Stop run (checkpoint and exit)"):
         ss.cancel_flag.set()
         st.toast("Stopping at next row boundary…")
 
-    # Live event log (last 20)
-    with st.expander("Run log", expanded=False):
-        for ev in events[-20:]:
+    # Live event log — expanded by default, last 50
+    with st.expander(f"Run log ({len(events)} events)", expanded=True):
+        for ev in events[-50:]:
             icon = {"start": "▶", "row_done": "✅", "row_error": "⚠️", "paused": "⏸",
                     "finished": "🏁"}.get(ev.kind, "•")
             st.text(f"{icon} {ev.last_message}")
