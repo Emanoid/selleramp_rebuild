@@ -41,6 +41,19 @@ st.set_page_config(page_title="sa-rebuild — FBA Sourcing Calculator", layout="
 
 # ---------------------------------------------------------------------------- helpers
 
+def _fmt_duration(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "—"
+    s = int(round(seconds))
+    if s < 60:
+        return f"{s}s"
+    m, s = divmod(s, 60)
+    if m < 60:
+        return f"{m}m {s}s"
+    h, m = divmod(m, 60)
+    return f"{h}h {m}m"
+
+
 TEMPLATE_CSV = (
     "upc,asin,cost,weight_lbs,prep_cost\n"
     "028800127321,,8.91,0.73,0.00\n"
@@ -62,20 +75,29 @@ def _ensure_session():
 def _start_run(
     cfg: AppConfig,
     input_path: Path,
-    output_path: Path,
+    output_path_base: Path,  # without the run-id suffix
     variations: int,
     include_descriptions: bool,
 ):
     ss = st.session_state
+    if ss.worker_thread is not None and ss.worker_thread.is_alive():
+        st.warning("A run is already in progress. Stop it before starting a new one.")
+        return
     rows = read_input(input_path)
     if not rows:
         st.error("No usable rows in the uploaded CSV.")
         return
     rs = state_mod.RunState.new(
         input_csv=str(input_path),
-        output_csv=str(output_path),
+        output_csv="",  # filled in below once we know the run_id
         row_ids=[r.row_id for r in rows],
     )
+    # Splice the run_id's random suffix into the output filename so two
+    # near-simultaneous Start clicks land on different files (collision-proof).
+    output_path = output_path_base.with_name(
+        output_path_base.stem + "_" + rs.run_id.split("-")[-1] + output_path_base.suffix
+    )
+    rs.output_csv = str(output_path)
     state_mod.save(rs)
     inputs_by_row_id = {r.row_id: r for r in rows}
     ss.run_id = rs.run_id
@@ -93,6 +115,7 @@ def _start_run(
             include_descriptions=include_descriptions,
             variations_fetch_max=variations,
             cancel_check=cancel.is_set,
+            is_resume=False,
         ):
             events_buf.append(ev)
 
@@ -101,12 +124,15 @@ def _start_run(
 
 
 def _resume_existing(cfg: AppConfig, variations: int, include_descriptions: bool) -> bool:
+    ss = st.session_state
+    if ss.worker_thread is not None and ss.worker_thread.is_alive():
+        st.warning("A run is already in progress.")
+        return False
     rs = state_mod.load_last()
     if rs is None or not rs.remaining_row_ids:
         return False
     rows = read_input(rs.input_csv)
     inputs_by_row_id = {r.row_id: r for r in rows}
-    ss = st.session_state
     ss.run_id = rs.run_id
     ss.output_path = rs.output_csv
     ss.started_at = time.time()
@@ -121,6 +147,7 @@ def _resume_existing(cfg: AppConfig, variations: int, include_descriptions: bool
             include_descriptions=include_descriptions,
             variations_fetch_max=variations,
             cancel_check=cancel.is_set,
+            is_resume=True,
         ):
             events_buf.append(ev)
 
@@ -129,18 +156,46 @@ def _resume_existing(cfg: AppConfig, variations: int, include_descriptions: bool
     return True
 
 
+def _live_tokens(events: list[ProgressEvent]) -> tuple[int, float]:
+    """Extrapolate current token count from the latest event + elapsed time + refill rate.
+
+    Returns (predicted_tokens, refill_rate_per_min).
+    """
+    if not events:
+        return 0, 1.0
+    latest = events[-1]
+    elapsed_min = max(0.0, (time.time() - latest.timestamp) / 60.0)
+    refill = latest.refill_rate_per_min or 1.0
+    # Bucket size cap (Keepa Pro = 60). Anything larger gets clamped here only for
+    # display; the runner uses Keepa's actual response numbers.
+    return min(60, int(latest.tokens_left + elapsed_min * refill)), refill
+
+
+def _avg_tokens_per_row(events: list[ProgressEvent]) -> Optional[float]:
+    rows = [e for e in events if e.kind == "row_done" and not e.cache_hit]
+    if not rows:
+        return None
+    return sum(e.tokens_consumed for e in rows) / len(rows)
+
+
 def _eta_seconds(events: list[ProgressEvent], remaining: int) -> Optional[float]:
-    """Estimate seconds remaining from the rate of recent row_done events."""
-    done = [e for e in events if e.kind == "row_done"]
-    if len(done) < 2:
-        return None
-    # Use elapsed wallclock since first row_done as a proxy.
-    started = st.session_state.get("started_at") or time.time()
-    elapsed = time.time() - started
-    rate = len(done) / max(elapsed, 1.0)
-    if rate <= 0:
-        return None
-    return remaining / rate
+    """ETA based on token budget: remaining_rows * avg_tokens_per_row vs current tokens."""
+    if remaining <= 0:
+        return 0.0
+    avg = _avg_tokens_per_row(events)
+    if avg is None or avg <= 0:
+        # Pre-first-row fallback: rate-based
+        done = [e for e in events if e.kind == "row_done"]
+        if len(done) < 1:
+            return None
+        started = st.session_state.get("started_at") or time.time()
+        elapsed = time.time() - started
+        rate = len(done) / max(elapsed, 1.0)
+        return remaining / rate if rate > 0 else None
+    tokens_now, refill = _live_tokens(events)
+    tokens_needed = remaining * avg
+    deficit = max(0, tokens_needed - tokens_now)
+    return deficit * 60.0 / refill
 
 
 # ---------------------------------------------------------------------------- UI
@@ -177,6 +232,19 @@ with st.sidebar:
         "Include column-help row in report CSV",
         value=True,
         help="Adds a plain-language description as the second row of the report. Disable for cleaner pandas/Excel imports.",
+    )
+
+    st.divider()
+    st.subheader("Throttling")
+    max_wait_minutes = st.slider(
+        "Max wait per row (minutes)",
+        min_value=5, max_value=720, value=240, step=5,
+        help=(
+            "If a row needs longer than this for Keepa tokens to refill, the run "
+            "auto-pauses (you click Resume later). Default 240 (4 h) means most "
+            "rows sleep through. Lower it if you'd rather have manual pauses; "
+            "raise it if you want fully unattended runs."
+        ),
     )
 
     st.divider()
@@ -220,6 +288,7 @@ if prior and prior.remaining_row_ids and not worker_running and ss.run_id != pri
             st.error("Enter your Keepa API key in the sidebar first.")
         else:
             cfg = AppConfig.load()
+            cfg.runtime.max_wait_minutes = max_wait_minutes
             if _resume_existing(cfg, variations, include_descriptions):
                 st.rerun()
 
@@ -236,6 +305,7 @@ if st.button("▶ Start run", type="primary", disabled=run_disabled):
         in_path.write_bytes(uploaded.getvalue())
         out_path = output_dir() / f"report_{ts}.csv"
         cfg = AppConfig.load()
+        cfg.runtime.max_wait_minutes = max_wait_minutes
         _start_run(cfg, in_path, out_path, variations, include_descriptions)
         st.rerun()
 
@@ -250,14 +320,32 @@ if worker_running or events:
     latest = events[-1] if events else None
     rows_done = latest.rows_done if latest else 0
     rows_total = latest.rows_total if latest else 0
-    tokens_left = latest.tokens_left if latest else 0
     pct = (rows_done / rows_total) if rows_total else 0.0
 
+    tokens_now, refill = _live_tokens(events)
+    avg_tok = _avg_tokens_per_row(events)
+    eta = _eta_seconds(events, rows_total - rows_done) if worker_running else 0.0
+
+    # Aggregate stats across all events
+    done_events = [e for e in events if e.kind == "row_done"]
+    cache_hits = sum(1 for e in done_events if e.cache_hit)
+    total_tokens_used = sum(e.tokens_consumed for e in done_events)
+    total_wait_s = sum(e.wait_seconds for e in done_events)
+    total_row_s = sum(e.row_seconds for e in done_events)
+    error_count = sum(1 for e in events if e.kind == "row_error")
+
+    # Row 1: high-level
     cols = st.columns(4)
-    cols[0].metric("Rows done", f"{rows_done}/{rows_total}")
-    cols[1].metric("Tokens left", tokens_left)
-    eta = _eta_seconds(events, rows_total - rows_done) if worker_running else None
-    cols[2].metric("ETA", f"{eta/60:.0f} min" if eta else "—")
+    cols[0].metric("Rows done", f"{rows_done}/{rows_total}",
+                   delta=f"{error_count} errors" if error_count else None,
+                   delta_color="inverse")
+    cols[1].metric(
+        "Tokens (live)",
+        f"{tokens_now}/60",
+        delta=f"+{refill:.0f}/min refill",
+        delta_color="normal",
+    )
+    cols[2].metric("ETA", _fmt_duration(eta) if eta is not None else "—")
     last_label = "—"
     for ev in reversed(events):
         if ev.last_row and ev.last_row.get("viability_label"):
@@ -265,15 +353,26 @@ if worker_running or events:
             break
     cols[3].metric("Last verdict", last_label)
 
-    st.progress(pct, text=f"{int(pct*100)}% — {(latest.last_message if latest else '')[:120]}")
+    # Row 2: token economy
+    cols2 = st.columns(4)
+    cols2[0].metric("Tokens spent", total_tokens_used)
+    cols2[1].metric("Avg tokens/row",
+                    f"{avg_tok:.1f}" if avg_tok else "—",
+                    help="Excludes cache hits.")
+    cols2[2].metric("Cache hits", f"{cache_hits}/{len(done_events)}" if done_events else "0/0",
+                    help="Free fetches served from local 24h cache.")
+    cols2[3].metric("Total wait", _fmt_duration(total_wait_s),
+                    help="Cumulative time spent sleeping for token refill.")
+
+    st.progress(pct, text=f"{int(pct*100)}% — {(latest.last_message if latest else '')[:140]}")
 
     if st.button("⏹ Stop run (checkpoint and exit)"):
         ss.cancel_flag.set()
         st.toast("Stopping at next row boundary…")
 
-    # Live event log (last 20)
-    with st.expander("Run log", expanded=False):
-        for ev in events[-20:]:
+    # Live event log — expanded by default, last 50
+    with st.expander(f"Run log ({len(events)} events)", expanded=True):
+        for ev in events[-50:]:
             icon = {"start": "▶", "row_done": "✅", "row_error": "⚠️", "paused": "⏸",
                     "finished": "🏁"}.get(ev.kind, "•")
             st.text(f"{icon} {ev.last_message}")

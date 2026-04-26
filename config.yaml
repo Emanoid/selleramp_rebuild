@@ -14,9 +14,12 @@ keepa:
   cache_ttl_hours: 24
   expected_token_cost: 8     # conservative; client adjusts using actual response
 
-# Throttling — when predicted wait exceeds this, checkpoint and exit gracefully.
+# Throttling — if a row would need to wait LONGER than this for Keepa tokens,
+# the runner checkpoints and exits (you click "Resume" later). 240 min ≈ 4 h
+# means most variation-heavy rows sleep through automatically. Lower this for
+# unattended CLI use where you want graceful pausing instead of long sleeps.
 runtime:
-  max_wait_minutes: 30
+  max_wait_minutes: 240
 
 # Fee profile (mirrors SellerAmp screenshot)
 fees:

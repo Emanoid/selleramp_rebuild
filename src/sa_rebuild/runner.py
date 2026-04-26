@@ -32,6 +32,15 @@ class ProgressEvent:
     tokens_left: int
     last_message: str
     last_row: Optional[Dict] = None  # the just-written report row (for live preview)
+    # Per-row stats (populated for row_done / row_error)
+    cache_hit: bool = False
+    tokens_consumed: int = 0
+    wait_seconds: float = 0.0
+    row_seconds: float = 0.0
+    # Refill rate from Keepa (tokens/min) so the UI can compute live token countup
+    refill_rate_per_min: float = 1.0
+    # Snapshot timestamp so the UI can extrapolate token count between events
+    timestamp: float = 0.0
 
 
 def build_keepa_client(cfg: AppConfig) -> tuple[KeepaClient, Cache, TokenBucket]:
@@ -48,6 +57,7 @@ def iter_process(
     include_descriptions: bool = True,
     variations_fetch_max: int = 0,
     cancel_check: Optional[Callable[[], bool]] = None,
+    is_resume: bool = False,
 ) -> Iterator[ProgressEvent]:
     """Drive the full run, yielding a ProgressEvent after each row.
 
@@ -56,40 +66,52 @@ def iter_process(
     """
     client, cache, bucket = build_keepa_client(cfg)
     fetch_asin = client.fetch_by_asin
+
+    def _ev(kind: str, msg: str, last_row: Optional[Dict] = None,
+            cache_hit: bool = False, tokens_consumed: int = 0,
+            wait_seconds: float = 0.0, row_seconds: float = 0.0) -> ProgressEvent:
+        return ProgressEvent(
+            kind=kind,
+            rows_done=rs.rows_done,
+            rows_total=rs.rows_total,
+            tokens_left=client.tokens_left(),
+            last_message=msg,
+            last_row=last_row,
+            cache_hit=cache_hit,
+            tokens_consumed=tokens_consumed,
+            wait_seconds=wait_seconds,
+            row_seconds=row_seconds,
+            refill_rate_per_min=bucket.refill_rate_per_min,
+            timestamp=time.time(),
+        )
+
     try:
-        with ReportWriter(rs.output_csv, include_descriptions=include_descriptions) as writer:
-            yield ProgressEvent(
-                kind="start",
-                rows_done=rs.rows_done,
-                rows_total=rs.rows_total,
-                tokens_left=client.tokens_left(),
-                last_message=f"Run {rs.run_id} starting — {rs.rows_total - rs.rows_done} rows to process",
-            )
+        with ReportWriter(rs.output_csv, include_descriptions=include_descriptions,
+                          allow_resume=is_resume) as writer:
+            yield _ev("start",
+                      f"Run {rs.run_id} starting — {rs.rows_total - rs.rows_done} rows to process")
             remaining = list(rs.remaining_row_ids)
+            already_done = set(rs.completed_row_ids)
             for idx, row_id in enumerate(remaining, start=1):
                 if cancel_check and cancel_check():
-                    yield ProgressEvent(
-                        kind="paused",
-                        rows_done=rs.rows_done,
-                        rows_total=rs.rows_total,
-                        tokens_left=client.tokens_left(),
-                        last_message="Stopped by user. Resume any time.",
-                    )
+                    yield _ev("paused", "Stopped by user. Resume any time.")
                     return
+                # Defensive dedup: never re-process a row that's already in completed_row_ids.
+                if row_id in already_done:
+                    log.info("skipping row#%s — already in completed_row_ids", row_id)
+                    if row_id in rs.remaining_row_ids:
+                        rs.remaining_row_ids.remove(row_id)
+                    state_mod.save(rs)
+                    continue
                 in_row = inputs_by_row_id.get(row_id)
                 if not in_row:
                     state_mod.mark_error(rs, row_id, "?", "input", "missing input row")
-                    yield ProgressEvent(
-                        kind="row_error",
-                        rows_done=rs.rows_done,
-                        rows_total=rs.rows_total,
-                        tokens_left=client.tokens_left(),
-                        last_message=f"row#{row_id} skipped — missing input",
-                    )
+                    yield _ev("row_error", f"row#{row_id} skipped — missing input")
                     continue
 
                 key = in_row.lookup_key
-                kind = "asin" if in_row.lookup_is_asin else "upc"
+                fetch_kind = "asin" if in_row.lookup_is_asin else "upc"
+                row_t0 = time.time()
                 try:
                     if in_row.lookup_is_asin:
                         product = client.fetch_by_asin(key)
@@ -97,24 +119,12 @@ def iter_process(
                         product = client.fetch_by_upc(key)
                 except TokensExhausted as e:
                     log.warning(str(e))
-                    yield ProgressEvent(
-                        kind="paused",
-                        rows_done=rs.rows_done,
-                        rows_total=rs.rows_total,
-                        tokens_left=client.tokens_left(),
-                        last_message=str(e),
-                    )
+                    yield _ev("paused", str(e))
                     return
                 except Exception as e:
-                    log.exception("fetch failed %s=%s", kind, key)
+                    log.exception("fetch failed %s=%s", fetch_kind, key)
                     state_mod.mark_error(rs, row_id, key, "fetch", repr(e))
-                    yield ProgressEvent(
-                        kind="row_error",
-                        rows_done=rs.rows_done,
-                        rows_total=rs.rows_total,
-                        tokens_left=client.tokens_left(),
-                        last_message=f"row#{row_id} {kind}={key} fetch failed: {e}",
-                    )
+                    yield _ev("row_error", f"row#{row_id} {fetch_kind}={key} fetch failed: {e}")
                     continue
 
                 row = build_row(
@@ -124,24 +134,22 @@ def iter_process(
                 )
                 writer.write(row)
                 state_mod.mark_done(rs, row_id, client.tokens_left())
-                yield ProgressEvent(
-                    kind="row_done",
-                    rows_done=rs.rows_done,
-                    rows_total=rs.rows_total,
-                    tokens_left=client.tokens_left(),
-                    last_message=(
-                        f"row#{row_id} {kind}={key} cost=${in_row.cost:.2f} "
-                        f"→ {row.get('viability_label', '—')}"
-                    ),
-                    last_row=row,
+
+                row_seconds = time.time() - row_t0
+                cache_hit = client.last_was_cache_hit
+                tokens_used = client.last_tokens_consumed
+                waited = client.last_wait_seconds
+                src = "💾 cache" if cache_hit else f"🌐 keepa ({tokens_used}t)"
+                wait_str = f" ⏳{waited:.0f}s wait" if waited > 1 else ""
+                msg = (
+                    f"row#{row_id} {fetch_kind}={key} cost=${in_row.cost:.2f} "
+                    f"→ {row.get('viability_label', '—')} "
+                    f"[{src}{wait_str} ⏱{row_seconds:.1f}s]"
                 )
+                yield _ev("row_done", msg, last_row=row,
+                          cache_hit=cache_hit, tokens_consumed=tokens_used,
+                          wait_seconds=waited, row_seconds=row_seconds)
                 time.sleep(0.05)
     finally:
         cache.close()
-    yield ProgressEvent(
-        kind="finished",
-        rows_done=rs.rows_done,
-        rows_total=rs.rows_total,
-        tokens_left=0,
-        last_message=f"Run complete — {rs.rows_done}/{rs.rows_total} processed",
-    )
+    yield _ev("finished", f"Run complete — {rs.rows_done}/{rs.rows_total} processed")

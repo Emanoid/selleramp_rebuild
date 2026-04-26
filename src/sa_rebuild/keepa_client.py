@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Dict, Optional
 
 import keepa  # PyPI: keepa
@@ -31,6 +32,11 @@ class KeepaClient:
         initial_left = getattr(self._api, "tokens_left", None)
         if initial_left is not None:
             self.bucket.update(int(initial_left))
+        # Per-call stats — reset on every fetch_*; readable by callers afterward.
+        self.last_was_cache_hit: bool = False
+        self.last_tokens_consumed: int = 0
+        self.last_wait_seconds: float = 0.0
+        self.last_fetch_seconds: float = 0.0
 
     # ------------------------------------------------------------------ helpers
 
@@ -43,7 +49,8 @@ class KeepaClient:
     def _ttl_seconds(self) -> int:
         return self.cfg.keepa.cache_ttl_hours * 3600
 
-    def _ensure_tokens(self, expected: int) -> None:
+    def _ensure_tokens(self, expected: int) -> float:
+        """Block until enough tokens. Returns seconds slept (0 if no wait)."""
         max_wait_s = self.cfg.runtime.max_wait_minutes * 60
         slept = self.bucket.wait_for(expected, max_wait_seconds=max_wait_s)
         if slept < 0:
@@ -51,6 +58,7 @@ class KeepaClient:
                 f"Need {expected} tokens; predicted wait > {self.cfg.runtime.max_wait_minutes}m. "
                 f"Currently ~{self.bucket.predicted_now()} tokens, refill {self.bucket.refill_rate_per_min}/min."
             )
+        return slept
 
     def _query(self, *, items: list[str], product_code_is_asin: bool) -> list[dict]:
         kp_cfg = self.cfg.keepa
@@ -73,20 +81,41 @@ class KeepaClient:
 
     # ------------------------------------------------------------------ public
 
+    def _reset_stats(self) -> None:
+        self.last_was_cache_hit = False
+        self.last_tokens_consumed = 0
+        self.last_wait_seconds = 0.0
+        self.last_fetch_seconds = 0.0
+
     def fetch_by_upc(self, upc: str) -> Optional[Dict[str, Any]]:
         """Resolve a UPC straight to a fully-hydrated product blob (single call)."""
+        self._reset_stats()
         cached = self.cache.get(self._cache_key("upc", upc))
         if cached is not None:
+            self.last_was_cache_hit = True
             log.debug("cache hit upc=%s", upc)
             return cached or None
 
-        self._ensure_tokens(self.cfg.keepa.expected_token_cost)
+        tokens_before = self.bucket.predicted_now()
+        self.last_wait_seconds = self._ensure_tokens(self.cfg.keepa.expected_token_cost)
         log.info("keepa upc=%s tokens_before=%s", upc, self.bucket.tokens_left)
+        t0 = time.time()
         try:
             results = self._query(items=[upc], product_code_is_asin=False)
         except Exception as e:
             log.error("keepa query failed upc=%s err=%s", upc, e)
+            # Keepa library raises bare RuntimeError("NOT_ENOUGH_TOKEN") when
+            # its own internal counter disagrees with ours. Convert to our
+            # token-exhaustion exception so the runner pauses (and resumes
+            # retrying this row) instead of treating it as a row-level fatal.
+            if "NOT_ENOUGH_TOKEN" in str(e):
+                raise TokensExhausted(
+                    f"Keepa reported NOT_ENOUGH_TOKEN. Local mirror says "
+                    f"{self.bucket.predicted_now()} tokens; will retry on resume."
+                ) from e
             raise
+        self.last_fetch_seconds = time.time() - t0
+        self.last_tokens_consumed = max(0, tokens_before - self.bucket.tokens_left)
         product = results[0] if results else None
         # Cache positive AND negative resolutions to avoid re-spending tokens on bad UPCs.
         self.cache.set(
@@ -97,11 +126,25 @@ class KeepaClient:
         return product
 
     def fetch_by_asin(self, asin: str) -> Optional[Dict[str, Any]]:
+        self._reset_stats()
         cached = self.cache.get(self._cache_key("asin", asin))
         if cached is not None:
+            self.last_was_cache_hit = True
             return cached or None
-        self._ensure_tokens(self.cfg.keepa.expected_token_cost)
-        results = self._query(items=[asin], product_code_is_asin=True)
+        tokens_before = self.bucket.predicted_now()
+        self.last_wait_seconds = self._ensure_tokens(self.cfg.keepa.expected_token_cost)
+        t0 = time.time()
+        try:
+            results = self._query(items=[asin], product_code_is_asin=True)
+        except Exception as e:
+            if "NOT_ENOUGH_TOKEN" in str(e):
+                raise TokensExhausted(
+                    f"Keepa reported NOT_ENOUGH_TOKEN. Local mirror says "
+                    f"{self.bucket.predicted_now()} tokens; will retry on resume."
+                ) from e
+            raise
+        self.last_fetch_seconds = time.time() - t0
+        self.last_tokens_consumed = max(0, tokens_before - self.bucket.tokens_left)
         product = results[0] if results else None
         self.cache.set(
             self._cache_key("asin", asin),

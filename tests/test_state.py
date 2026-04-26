@@ -50,3 +50,20 @@ def test_duplicate_upc_rows_tracked_independently(tmp_path, monkeypatch):
     reloaded = state_mod.load_last()
     assert reloaded.rows_done == 2
     assert reloaded.completed_row_ids == [0, 1]
+
+
+def test_completed_rows_are_not_double_processed(tmp_path, monkeypatch):
+    """Resume must not re-process row_ids already in completed_row_ids,
+    even if they're somehow still listed in remaining_row_ids."""
+    monkeypatch.setattr(state_mod, "STATE_DIR", tmp_path)
+    monkeypatch.setattr(state_mod, "LAST_RUN_POINTER", tmp_path / "last_run.json")
+    rs = state_mod.RunState.new("i.csv", "o.csv", row_ids=[0, 1, 2])
+    state_mod.mark_done(rs, 0, tokens_left=50)
+    state_mod.mark_done(rs, 1, tokens_left=44)
+    # Simulate the corrupt-state case: row 1 in BOTH lists.
+    rs.remaining_row_ids = [1, 2]
+    state_mod.save(rs)
+    reloaded = state_mod.load_last()
+    # mark_done is idempotent — calling it twice for the same row_id is a no-op.
+    state_mod.mark_done(reloaded, 1, tokens_left=40)
+    assert reloaded.completed_row_ids.count(1) == 1

@@ -28,12 +28,14 @@ def _process(
     inputs_by_row_id: dict,
     include_descriptions: bool,
     variations_fetch_max: int,
+    is_resume: bool = False,
 ) -> int:
     setup_logging("INFO")
     for ev in iter_process(
         cfg, rs, inputs_by_row_id,
         include_descriptions=include_descriptions,
         variations_fetch_max=variations_fetch_max,
+        is_resume=is_resume,
     ):
         if ev.kind == "row_done":
             console.log(
@@ -120,7 +122,7 @@ def resume(
         f"Resuming run [bold]{rs.run_id}[/bold] — "
         f"{rs.rows_done}/{rs.rows_total} done, {len(rs.remaining_row_ids)} remaining"
     )
-    sys.exit(_process(cfg, rs, inputs_by_row_id, descriptions, var_max))
+    sys.exit(_process(cfg, rs, inputs_by_row_id, descriptions, var_max, is_resume=True))
 
 
 @app.command()
