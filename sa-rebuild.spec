@@ -9,6 +9,11 @@
 #     we ship it as a data file alongside the rest of the package.
 
 # ruff: noqa
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path("src").resolve()))
+from sa_rebuild import __version__ as _PKG_VERSION  # noqa: E402
+
 from PyInstaller.utils.hooks import collect_all, copy_metadata
 
 datas = []
@@ -95,7 +100,8 @@ if sys.platform == "darwin":
         bundle_identifier="dev.olatunde.sa-rebuild",
         info_plist={
             "CFBundleDisplayName": "sa-rebuild",
-            "CFBundleShortVersionString": "0.1.0",
+            "CFBundleShortVersionString": _PKG_VERSION,
+            "CFBundleVersion": _PKG_VERSION,
             "NSHighResolutionCapable": True,
             "LSBackgroundOnly": False,
         },

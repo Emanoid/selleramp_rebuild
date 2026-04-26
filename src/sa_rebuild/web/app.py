@@ -24,7 +24,7 @@ for candidate in (_HERE.parents[2], getattr(sys, "_MEIPASS", None)):
     if candidate and str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-from sa_rebuild import state as state_mod
+from sa_rebuild import __version__, state as state_mod
 from sa_rebuild.config import AppConfig
 from sa_rebuild.csv_io import COLUMN_DESCRIPTIONS, REPORT_COLUMNS, read_input
 from sa_rebuild.paths import (
@@ -203,7 +203,7 @@ def _eta_seconds(events: list[ProgressEvent], remaining: int) -> Optional[float]
 _ensure_session()
 ss = st.session_state
 
-st.title("sa-rebuild")
+st.title(f"sa-rebuild  v{__version__}")
 st.caption("Drag-drop a CSV of UPC/ASIN + cost. Get a per-row Buy/Caution/Skip report from Keepa.")
 
 # ---- Sidebar: API key + settings -------------------------------------------
@@ -370,15 +370,36 @@ if worker_running or events:
         ss.cancel_flag.set()
         st.toast("Stopping at next row boundary…")
 
-    # Live event log — expanded by default, last 50
-    with st.expander(f"Run log ({len(events)} events)", expanded=True):
-        for ev in events[-50:]:
-            icon = {"start": "▶", "row_done": "✅", "row_error": "⚠️", "paused": "⏸",
-                    "finished": "🏁"}.get(ev.kind, "•")
-            st.text(f"{icon} {ev.last_message}")
+    # "Currently doing" line — fills the gap between row_done events so the
+    # user always sees something live (instead of a frozen progress bar).
+    if worker_running and latest and latest.kind in ("row_done", "start"):
+        elapsed_since_event = time.time() - (latest.timestamp or time.time())
+        if elapsed_since_event > 2:
+            tokens_needed = int(avg_tok) if avg_tok else 7
+            tokens_short = max(0, tokens_needed - tokens_now)
+            if tokens_short > 0:
+                wait_left = tokens_short * 60.0 / refill
+                st.info(
+                    f"⏳ Waiting for tokens — need {tokens_needed}, have {tokens_now}. "
+                    f"~{_fmt_duration(wait_left)} until next row "
+                    f"(elapsed {_fmt_duration(elapsed_since_event)})"
+                )
+            else:
+                st.info(f"🌐 Fetching from Keepa… (elapsed {_fmt_duration(elapsed_since_event)})")
+
+    # Live event log — ALWAYS visible inline, no expander, monospace.
+    st.markdown(f"**Run log** — {len(events)} events")
+    log_lines = []
+    for ev in events[-100:]:
+        icon = {"start": "▶", "row_done": "✅", "row_error": "⚠️", "paused": "⏸",
+                "finished": "🏁"}.get(ev.kind, "•")
+        log_lines.append(f"{icon} {ev.last_message}")
+    st.code("\n".join(log_lines) if log_lines else "(no events yet)", language=None)
 
     if worker_running:
-        time.sleep(1)
+        # 0.5s refresh while a worker is alive — feels real-time, no measurable
+        # CPU cost since most of each tick is `time.sleep`.
+        time.sleep(0.5)
         st.rerun()
 
 # ---- Final result download -------------------------------------------------
