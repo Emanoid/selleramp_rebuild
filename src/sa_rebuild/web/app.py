@@ -249,6 +249,15 @@ with st.sidebar:
 
     st.divider()
     st.caption(f"Data folder: `{app_home()}`")
+    if st.button("🛑 Force-quit app", help="Kill the sa-rebuild process and any siblings."):
+        import os as _os
+        import subprocess as _sp
+        try:
+            _sp.run(["pkill", "-9", "-f", "sa-rebuild"], check=False, timeout=5)
+        except Exception:
+            pass
+        state_mod.clear_active_heartbeat()
+        _os._exit(0)
 
 # ---- Top section: template + upload ----------------------------------------
 left, right = st.columns(2)
@@ -383,9 +392,27 @@ if worker_running or events:
 
     st.progress(pct, text=f"{int(pct*100)}% — {(latest.last_message if latest else '')[:140]}")
 
-    if st.button("⏹ Stop run (checkpoint and exit)"):
-        ss.cancel_flag.set()
-        st.toast("Stopping at next row boundary…")
+    stop_cols = st.columns(2)
+    with stop_cols[0]:
+        if st.button("⏹ Stop run (checkpoint, ~½ s)",
+                     help="Asks the worker to checkpoint and exit cleanly. Now polls every "
+                          "0.5s even mid-token-wait, so it acts within seconds — not minutes."):
+            ss.cancel_flag.set()
+            st.toast("Stopping at next checkpoint…")
+    with stop_cols[1]:
+        if st.button("🛑 Force-quit app (kill everything)",
+                     type="secondary",
+                     help="Last resort: kills the sa-rebuild process AND any other sa-rebuild "
+                          "processes on this machine. Browser tab will lose its connection."):
+            import os as _os
+            import subprocess as _sp
+            try:
+                # Kill any sibling sa-rebuild processes (covers stuck older instances).
+                _sp.run(["pkill", "-9", "-f", "sa-rebuild"], check=False, timeout=5)
+            except Exception:
+                pass
+            state_mod.clear_active_heartbeat()
+            _os._exit(0)  # bypass atexit / threading cleanup — guaranteed to die
 
     # "Currently doing" line — fills the gap between row_done events so the
     # user always sees something live. Heuristic: a Keepa fetch takes ~10–20s.
