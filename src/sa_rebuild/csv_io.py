@@ -132,7 +132,7 @@ def _parse_float(s: str) -> Optional[float]:
 def read_input(path: Path | str) -> List[InputRow]:
     """Accept CSVs with `upc` and/or `asin`. At least one must be present per row."""
     rows: List[InputRow] = []
-    with Path(path).open(newline="") as f:
+    with Path(path).open(newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
         fields = set(reader.fieldnames or [])
         if "cost" not in fields:
@@ -173,7 +173,7 @@ class ReportWriter:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._fresh = not self.path.exists()
-        self._fh = self.path.open("a", newline="")
+        self._fh = self.path.open("a", newline="", encoding="utf-8")
         self._writer = csv.DictWriter(self._fh, fieldnames=REPORT_COLUMNS, extrasaction="ignore")
         if self._fresh:
             self._writer.writeheader()

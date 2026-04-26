@@ -58,7 +58,7 @@ class RunState:
 def _atomic_write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w") as f:
+    with tmp.open("w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2, default=str)
         f.flush()
         os.fsync(f.fileno())
@@ -74,7 +74,7 @@ def save(state: RunState) -> None:
 
 def load(run_id: str) -> RunState:
     path = STATE_DIR / f"run_{run_id}.json"
-    with path.open() as f:
+    with path.open(encoding="utf-8") as f:
         data = json.load(f)
     return RunState(**data)
 
@@ -82,7 +82,7 @@ def load(run_id: str) -> RunState:
 def load_last() -> Optional[RunState]:
     if not LAST_RUN_POINTER.exists():
         return None
-    with LAST_RUN_POINTER.open() as f:
+    with LAST_RUN_POINTER.open(encoding="utf-8") as f:
         data = json.load(f)
     return RunState(**data)
 
