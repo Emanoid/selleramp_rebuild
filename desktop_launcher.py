@@ -46,6 +46,11 @@ def main() -> None:
     os.environ.setdefault("STREAMLIT_BROWSER_GATHER_USAGE_STATS", "false")
     os.environ.setdefault("STREAMLIT_GLOBAL_DEVELOPMENT_MODE", "false")
     os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
+    # Hide the Deploy button + the "Always rerun" prompt + the developer
+    # hamburger menu — none of these make sense in a bundled desktop app.
+    os.environ.setdefault("STREAMLIT_CLIENT_TOOLBAR_MODE", "viewer")
+    os.environ.setdefault("STREAMLIT_CLIENT_SHOW_ERROR_DETAILS", "false")
+    os.environ.setdefault("STREAMLIT_RUNNER_MAGIC_ENABLED", "false")
 
     # Open the browser once Streamlit is listening.
     def _open_when_ready() -> None:
@@ -71,6 +76,8 @@ def main() -> None:
         "--browser.gatherUsageStats", "false",
         "--global.developmentMode", "false",
         "--server.fileWatcherType", "none",
+        "--client.toolbarMode", "viewer",
+        "--client.showErrorDetails", "false",
     ]
     sys.exit(stcli.main())
 

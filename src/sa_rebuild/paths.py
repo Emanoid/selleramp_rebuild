@@ -76,7 +76,7 @@ def load_settings() -> Dict[str, Any]:
     if not path.exists():
         return {}
     try:
-        with path.open() as f:
+        with path.open(encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return {}
@@ -86,7 +86,7 @@ def save_settings(data: Dict[str, Any]) -> None:
     """Atomic write so a crash mid-write doesn't corrupt the file."""
     path = settings_path()
     tmp = path.with_suffix(".json.tmp")
-    with tmp.open("w") as f:
+    with tmp.open("w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
         f.flush()
         os.fsync(f.fileno())

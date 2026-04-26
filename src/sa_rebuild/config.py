@@ -92,7 +92,7 @@ class AppConfig(BaseModel):
             path = bundled_config_yaml()
         data: dict = {}
         if path and path.exists():
-            with path.open() as f:
+            with path.open(encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
         cfg = cls(**data)
         cfg.keepa_api_key = get_keepa_api_key() or ""
