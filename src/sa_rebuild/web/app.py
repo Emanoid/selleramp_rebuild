@@ -278,7 +278,24 @@ with right:
 prior = state_mod.load_last()
 worker_running = ss.worker_thread is not None and ss.worker_thread.is_alive()
 
-if prior and prior.remaining_row_ids and not worker_running and ss.run_id != prior.run_id:
+# Heartbeat: if my worker is alive, broadcast that I own it. Other tabs / sessions
+# poll this and back off so they don't spawn a parallel worker on the same files.
+if worker_running and ss.run_id:
+    state_mod.write_active_heartbeat(ss.run_id)
+
+other_active = state_mod.read_active_heartbeat()
+owned_by_me = (other_active and ss.run_id and other_active["run_id"] == ss.run_id)
+foreign_worker = bool(other_active) and not owned_by_me
+
+if foreign_worker:
+    st.error(
+        f"⚠️ Another browser tab is processing run **{other_active['run_id']}** "
+        "right now. To avoid corrupting the output, this tab is read-only until that "
+        "tab finishes or its worker stops. **Close one of the tabs, then refresh.**"
+    )
+
+if prior and prior.remaining_row_ids and not worker_running and not foreign_worker \
+        and ss.run_id != prior.run_id:
     st.warning(
         f"Previous run {prior.run_id} was paused with {len(prior.remaining_row_ids)} "
         f"of {prior.rows_total} rows remaining."
@@ -295,7 +312,7 @@ if prior and prior.remaining_row_ids and not worker_running and ss.run_id != pri
 # ---- Run button ------------------------------------------------------------
 st.subheader("3. Run analysis")
 
-run_disabled = uploaded is None or worker_running
+run_disabled = uploaded is None or worker_running or foreign_worker
 if st.button("▶ Start run", type="primary", disabled=run_disabled):
     if not get_keepa_api_key():
         st.error("Enter your Keepa API key in the sidebar first.")
@@ -371,17 +388,23 @@ if worker_running or events:
         st.toast("Stopping at next row boundary…")
 
     # "Currently doing" line — fills the gap between row_done events so the
-    # user always sees something live (instead of a frozen progress bar).
+    # user always sees something live. Heuristic: a Keepa fetch takes ~10–20s.
+    # If elapsed > 60s, the runner is sleeping inside _ensure_tokens — say so.
     if worker_running and latest and latest.kind in ("row_done", "start"):
         elapsed_since_event = time.time() - (latest.timestamp or time.time())
         if elapsed_since_event > 2:
             tokens_needed = int(avg_tok) if avg_tok else 7
             tokens_short = max(0, tokens_needed - tokens_now)
-            if tokens_short > 0:
-                wait_left = tokens_short * 60.0 / refill
+            looks_like_waiting = elapsed_since_event > 60 or tokens_short > 0
+            if looks_like_waiting:
+                if tokens_short > 0:
+                    wait_left = tokens_short * 60.0 / refill
+                    detail = (f"need {tokens_needed}, have {tokens_now}, "
+                              f"~{_fmt_duration(wait_left)} until next row")
+                else:
+                    detail = f"have {tokens_now}, will fetch shortly"
                 st.info(
-                    f"⏳ Waiting for tokens — need {tokens_needed}, have {tokens_now}. "
-                    f"~{_fmt_duration(wait_left)} until next row "
+                    f"⏳ Waiting for tokens — {detail} "
                     f"(elapsed {_fmt_duration(elapsed_since_event)})"
                 )
             else:
@@ -401,6 +424,12 @@ if worker_running or events:
         # CPU cost since most of each tick is `time.sleep`.
         time.sleep(0.5)
         st.rerun()
+
+# Clear the heartbeat once the worker is no longer alive so other tabs unfreeze.
+if not worker_running and ss.run_id:
+    other = state_mod.read_active_heartbeat()
+    if other and other.get("run_id") == ss.run_id:
+        state_mod.clear_active_heartbeat()
 
 # ---- Final result download -------------------------------------------------
 finished_event = next((e for e in reversed(events) if e.kind in ("finished", "paused")), None)
