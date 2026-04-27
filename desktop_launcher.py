@@ -18,6 +18,8 @@ import json
 import os
 import socket
 import sys
+import threading
+import time
 import webbrowser
 from pathlib import Path
 
@@ -59,7 +61,17 @@ def _clear_lock() -> None:
         pass
 
 
-def _server_alive(port: int) -> bool:
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
+def _server_alive(port: int, pid: int | None = None) -> bool:
+    if pid is not None and not _pid_alive(pid):
+        return False
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=0.5):
             return True
@@ -80,10 +92,13 @@ def main() -> None:
     lock = _read_lock()
     if lock:
         existing_port = lock.get("port")
-        if existing_port and _server_alive(existing_port):
+        existing_pid = lock.get("pid")
+        if existing_port and _server_alive(existing_port, pid=existing_pid):
             print(f"sa-rebuild already running on port {existing_port} — opening browser.")
             webbrowser.open(f"http://127.0.0.1:{existing_port}")
             return
+        # Stale lock — clear it and start fresh.
+        _clear_lock()
 
     port = _free_port()
     app_path = _bundled_app_path()
@@ -93,16 +108,32 @@ def main() -> None:
 
     _write_lock(port)
 
+    # Open the browser once Streamlit is listening.
+    # We use headless=true so Streamlit never opens the browser itself —
+    # we are the only caller of webbrowser.open, guaranteeing exactly one tab.
+    def _open_when_ready() -> None:
+        url = f"http://127.0.0.1:{port}"
+        for _ in range(60):  # wait up to 30 s
+            time.sleep(0.5)
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.25):
+                    break
+            except OSError:
+                continue
+        webbrowser.open(url)
+
+    threading.Thread(target=_open_when_ready, daemon=True).start()
+
     # Hand over to Streamlit's CLI runner.
-    # headless=false: Streamlit opens the browser exactly once at startup.
-    # We do NOT also call webbrowser.open() — that was the source of duplicate tabs.
+    # headless=true: skips the email-prompt and suppresses Streamlit's own
+    # browser-open call, so only our _open_when_ready opens a tab.
     from streamlit.web import cli as stcli
     try:
         sys.argv = [
             "streamlit", "run", str(app_path),
             "--server.port", str(port),
             "--server.address", "127.0.0.1",
-            "--server.headless", "false",
+            "--server.headless", "true",
             "--browser.gatherUsageStats", "false",
             "--global.developmentMode", "false",
             "--server.fileWatcherType", "none",

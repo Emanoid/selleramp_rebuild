@@ -106,7 +106,7 @@ _HEARTBEAT_PATH = STATE_DIR / "active_heartbeat.json"
 
 
 def write_active_heartbeat(run_id: str) -> None:
-    _atomic_write_json(_HEARTBEAT_PATH, {"run_id": run_id, "ts": time.time()})
+    _atomic_write_json(_HEARTBEAT_PATH, {"run_id": run_id, "ts": time.time(), "pid": os.getpid()})
 
 
 def read_active_heartbeat() -> Optional[dict]:
