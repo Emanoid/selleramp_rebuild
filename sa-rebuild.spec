@@ -97,7 +97,7 @@ if sys.platform == "darwin":
         coll,
         name="sa-rebuild.app",
         icon=None,
-        bundle_identifier="dev.olatunde.sa-rebuild",
+        bundle_identifier="dev.emanoid.sa-rebuild",
         info_plist={
             "CFBundleDisplayName": "sa-rebuild",
             "CFBundleShortVersionString": _PKG_VERSION,
