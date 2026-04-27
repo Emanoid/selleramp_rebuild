@@ -7,6 +7,7 @@ or, when bundled, via the desktop launcher in `desktop_launcher.py`.
 from __future__ import annotations
 
 import io
+import os
 import sys
 import threading
 import time
@@ -105,6 +106,7 @@ def _start_run(
     ss.started_at = time.time()
     ss.events = []
     ss.cancel_flag = threading.Event()
+    state_mod.clear_active_heartbeat()
 
     cancel = ss.cancel_flag
     events_buf = ss.events
@@ -138,6 +140,7 @@ def _resume_existing(cfg: AppConfig, variations: int, include_descriptions: bool
     ss.started_at = time.time()
     ss.events = []
     ss.cancel_flag = threading.Event()
+    state_mod.clear_active_heartbeat()
     cancel = ss.cancel_flag
     events_buf = ss.events
 
@@ -293,6 +296,9 @@ if worker_running and ss.run_id:
     state_mod.write_active_heartbeat(ss.run_id)
 
 other_active = state_mod.read_active_heartbeat()
+# Same process → new browser session reconnecting to our own server; adopt the run.
+if other_active and not ss.run_id and other_active.get("pid") == os.getpid():
+    ss.run_id = other_active["run_id"]
 owned_by_me = (other_active and ss.run_id and other_active["run_id"] == ss.run_id)
 foreign_worker = bool(other_active) and not owned_by_me
 
