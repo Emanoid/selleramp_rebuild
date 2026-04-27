@@ -38,15 +38,29 @@ class TokenBucket:
         deficit = target_tokens - have
         return math.ceil(deficit / self.refill_rate_per_min) * 60.0
 
-    def wait_for(self, target_tokens: int, max_wait_seconds: float) -> float:
-        """Sleep until enough tokens, or return -1 if wait would exceed max.
+    def wait_for(self, target_tokens: int, max_wait_seconds: float,
+                 cancel_check=None) -> float:
+        """Sleep until enough tokens accumulate.
 
-        Returns actual seconds slept, or -1 to signal "checkpoint and exit".
+        Returns:
+            actual seconds slept, or
+            -1 if wait would exceed max_wait_seconds (caller checkpoints+exits), or
+            -2 if cancel_check returned True mid-wait (caller treats as cancelled).
+
+        cancel_check: optional callable(); checked every 0.5s during the sleep
+        so the user's Stop button isn't blocked behind a multi-minute token wait.
         """
         wait = self.seconds_until(target_tokens)
         if wait <= 0:
             return 0.0
         if wait > max_wait_seconds:
             return -1.0
-        time.sleep(wait)
+        elapsed = 0.0
+        chunk = 0.5
+        while elapsed < wait:
+            if cancel_check and cancel_check():
+                return -2.0
+            sleep_for = min(chunk, wait - elapsed)
+            time.sleep(sleep_for)
+            elapsed += sleep_for
         return wait
