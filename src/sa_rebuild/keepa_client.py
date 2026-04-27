@@ -19,6 +19,10 @@ class TokensExhausted(Exception):
     """Raised when predicted wait exceeds runtime.max_wait_minutes — caller checkpoints and exits."""
 
 
+class CancelledByUser(Exception):
+    """Raised when the user requested stop while we were sleeping for token refill."""
+
+
 class KeepaClient:
     def __init__(self, cfg: AppConfig, cache: Cache, bucket: TokenBucket):
         if not cfg.keepa_api_key:
@@ -49,15 +53,22 @@ class KeepaClient:
     def _ttl_seconds(self) -> int:
         return self.cfg.keepa.cache_ttl_hours * 3600
 
-    def _ensure_tokens(self, expected: int) -> float:
-        """Block until enough tokens. Returns seconds slept (0 if no wait)."""
+    def _ensure_tokens(self, expected: int, cancel_check=None) -> float:
+        """Block until enough tokens. Returns seconds slept (0 if no wait).
+
+        Polls cancel_check every 0.5s during the sleep so the user's Stop
+        button is responsive even when the predicted wait is many minutes.
+        """
         max_wait_s = self.cfg.runtime.max_wait_minutes * 60
-        slept = self.bucket.wait_for(expected, max_wait_seconds=max_wait_s)
-        if slept < 0:
+        slept = self.bucket.wait_for(expected, max_wait_seconds=max_wait_s,
+                                     cancel_check=cancel_check)
+        if slept == -1.0:
             raise TokensExhausted(
                 f"Need {expected} tokens; predicted wait > {self.cfg.runtime.max_wait_minutes}m. "
                 f"Currently ~{self.bucket.predicted_now()} tokens, refill {self.bucket.refill_rate_per_min}/min."
             )
+        if slept == -2.0:
+            raise CancelledByUser("Stopped by user during token wait.")
         return slept
 
     def _query(self, *, items: list[str], product_code_is_asin: bool) -> list[dict]:
@@ -87,7 +98,7 @@ class KeepaClient:
         self.last_wait_seconds = 0.0
         self.last_fetch_seconds = 0.0
 
-    def fetch_by_upc(self, upc: str) -> Optional[Dict[str, Any]]:
+    def fetch_by_upc(self, upc: str, cancel_check=None) -> Optional[Dict[str, Any]]:
         """Resolve a UPC straight to a fully-hydrated product blob (single call)."""
         self._reset_stats()
         cached = self.cache.get(self._cache_key("upc", upc))
@@ -97,7 +108,9 @@ class KeepaClient:
             return cached or None
 
         tokens_before = self.bucket.predicted_now()
-        self.last_wait_seconds = self._ensure_tokens(self.cfg.keepa.expected_token_cost)
+        self.last_wait_seconds = self._ensure_tokens(
+            self.cfg.keepa.expected_token_cost, cancel_check=cancel_check
+        )
         log.info("keepa upc=%s tokens_before=%s", upc, self.bucket.tokens_left)
         t0 = time.time()
         try:
@@ -125,14 +138,16 @@ class KeepaClient:
         )
         return product
 
-    def fetch_by_asin(self, asin: str) -> Optional[Dict[str, Any]]:
+    def fetch_by_asin(self, asin: str, cancel_check=None) -> Optional[Dict[str, Any]]:
         self._reset_stats()
         cached = self.cache.get(self._cache_key("asin", asin))
         if cached is not None:
             self.last_was_cache_hit = True
             return cached or None
         tokens_before = self.bucket.predicted_now()
-        self.last_wait_seconds = self._ensure_tokens(self.cfg.keepa.expected_token_cost)
+        self.last_wait_seconds = self._ensure_tokens(
+            self.cfg.keepa.expected_token_cost, cancel_check=cancel_check
+        )
         t0 = time.time()
         try:
             results = self._query(items=[asin], product_code_is_asin=True)

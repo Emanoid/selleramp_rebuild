@@ -16,7 +16,7 @@ from . import state as state_mod
 from .cache import Cache
 from .config import AppConfig
 from .csv_io import InputRow, ReportWriter
-from .keepa_client import KeepaClient, TokensExhausted
+from .keepa_client import CancelledByUser, KeepaClient, TokensExhausted
 from .paths import cache_dir
 from .report import build_row
 from .token_bucket import TokenBucket
@@ -114,9 +114,12 @@ def iter_process(
                 row_t0 = time.time()
                 try:
                     if in_row.lookup_is_asin:
-                        product = client.fetch_by_asin(key)
+                        product = client.fetch_by_asin(key, cancel_check=cancel_check)
                     else:
-                        product = client.fetch_by_upc(key)
+                        product = client.fetch_by_upc(key, cancel_check=cancel_check)
+                except CancelledByUser:
+                    yield _ev("paused", "Stopped by user mid-wait. Resume any time.")
+                    return
                 except TokensExhausted as e:
                     log.warning(str(e))
                     yield _ev("paused", str(e))
