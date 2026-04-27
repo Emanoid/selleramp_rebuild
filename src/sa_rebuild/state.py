@@ -100,3 +100,31 @@ def mark_done(state: RunState, row_id: int, tokens_left: int) -> None:
 def mark_error(state: RunState, row_id: int, upc: str, stage: str, message: str) -> None:
     state.errors.append({"row_id": row_id, "upc": upc, "stage": stage, "message": message})
     save(state)
+
+
+_HEARTBEAT_PATH = STATE_DIR / "active_heartbeat.json"
+
+
+def write_active_heartbeat(run_id: str) -> None:
+    _atomic_write_json(_HEARTBEAT_PATH, {"run_id": run_id, "ts": time.time()})
+
+
+def read_active_heartbeat() -> Optional[dict]:
+    if not _HEARTBEAT_PATH.exists():
+        return None
+    try:
+        with _HEARTBEAT_PATH.open(encoding="utf-8") as f:
+            data = json.load(f)
+        # Expire after 10 s of silence (worker posts every ~0.5 s)
+        if time.time() - data.get("ts", 0) > 10:
+            return None
+        return data
+    except Exception:
+        return None
+
+
+def clear_active_heartbeat() -> None:
+    try:
+        _HEARTBEAT_PATH.unlink(missing_ok=True)
+    except Exception:
+        pass
