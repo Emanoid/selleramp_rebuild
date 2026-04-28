@@ -1,424 +1,288 @@
-# sa-rebuild — SellerAmp-style FBA Sourcing Calculator (Keepa-only)
+# sa-rebuild — FBA Sourcing Calculator
 
-A desktop app (also a Python CLI) that reads a CSV of UPCs and/or ASINs + wholesale
-costs and produces a per-row viability report — recommended sell price, fees,
-ROI, monthly sales, dominance, storefront link, Buy/Caution/Skip label,
-optional sibling-variation analysis — using only your Keepa Pro key.
+Reads a CSV of UPCs and/or ASINs + wholesale costs and produces a
+per-row viability report — recommended sell price, fees, ROI, monthly
+sales, dominance, storefront link, and a Buy / Caution / Skip verdict —
+using only your Keepa Pro key.
 
-Output mirrors your SellerAmp "FBA" profile (US, FBA, New only).
+Output mirrors a SellerAmp "FBA" profile (US, FBA, New only).
+
+> **Version history**
+> `0.x.x` — desktop app era (macOS .app / Windows .exe, archived on the
+> `os_based_build` branch)
+> `1.x.x` — web app era (Streamlit Community Cloud, current `main` branch)
 
 ---
 
-## For non-developers — Download and run the desktop app
+## For non-developers — use the web app
 
-You don't need to install Python or know any code. You download one file,
-double-click it, use it from your browser. **Full step-by-step screenshots
-and troubleshooting are in [`USER_GUIDE.md`](USER_GUIDE.md).** Quick version:
+No installation required. Open the app in your browser, enter your
+Keepa API key in the sidebar, upload a CSV, click **Start run**.
 
-### 1. Get your Keepa API key
+**App URL:** *(deploy to Streamlit Community Cloud and paste URL here)*
 
-Sign in at https://keepa.com → "API access" → copy the **Private API access
-key** (a long random string). You'll paste it into the app on first launch.
+### Step 1 — Get your Keepa API key
 
-### 2. Download the binary
+1. Sign in at [keepa.com](https://keepa.com).
+2. Go to **API access** → copy the **Private API access key** (a long
+   random string starting with a letter or number).
 
-Go to the **[Releases page](../../releases)** of this repo and grab the
-latest:
+### Step 2 — Prepare your CSV
 
-- **Mac users** → download `sa-rebuild-mac.zip`
-- **Windows users** → download `sa-rebuild-windows.zip`
+Download the template from inside the app (the **"Download CSV template"**
+button in section 1), then fill it in:
 
-> If you don't see any releases, the maintainer hasn't tagged one yet. See
-> the [Releasing](#releasing-trigger-the-build) section below — it takes
-> ~10 minutes from a single tag push.
-
-### 3. Run it
-
-**macOS**
-
-1. Double-click `sa-rebuild-mac.zip` to unzip → you'll get `sa-rebuild.app`.
-2. Drag it into your **Applications** folder.
-3. The first time you open it, macOS will warn it's from an unidentified
-   developer. **Right-click** the app → **Open** → click **Open** in the
-   dialog. (One-time only — after that, normal double-click works.)
-
-**Windows**
-
-1. Right-click `sa-rebuild-windows.zip` → **Extract All…**.
-2. Open the extracted folder, double-click `sa-rebuild.exe`.
-3. Windows SmartScreen may say "Windows protected your PC." Click
-   **More info** → **Run anyway**. (One-time only.)
-
-### 4. Use the app
-
-- A small terminal window opens (don't close it — that's the engine).
-- Your browser auto-opens to `http://127.0.0.1:<port>` after a few seconds.
-- In the **left sidebar**, paste your Keepa key. It saves automatically.
-- Click **Download CSV template**, fill in your products, save as CSV.
-- **Drag the CSV** onto the upload box.
-- Click **Start run**. Watch live progress. Download the report when done.
-
-When you're finished, close the terminal window to shut the app down.
-
-### 5. Where your data lives (all local, never uploaded)
-
-By default:
-
-- **Mac:** `~/.sa-rebuild/`
-- **Windows:** `C:\Users\<you>\.sa-rebuild\`
-
-Inside: `settings.json` (your key), `cache/`, `state/`, `output/`, `input/`.
-Safe to delete `cache/` to reclaim disk; **don't** delete `settings.json`
-unless you want to re-enter your key.
-
-### 6. Environment variables (advanced — usually leave alone)
-
-You can override defaults by setting these before launching the app:
-
-| Variable | What it does | Default |
+| Column | Required? | Notes |
 |---|---|---|
-| `KEEPA_API_KEY` | Skips the in-app key entry. Useful if you'd rather keep the key in your shell environment than in `settings.json`. The in-app field still wins if both are set. | (unset — read from `settings.json`) |
-| `SA_REBUILD_HOME` | Move the entire data folder somewhere else (external drive, cloud-sync folder, encrypted volume). The app stores cache/state/output/input/settings here. | `~/.sa-rebuild/` |
+| `upc` | One of these two | 12-digit barcode from your product |
+| `asin` | One of these two | Amazon's 10-character identifier |
+| `cost` | Yes | Your wholesale cost per unit, in USD |
+| `weight_lbs` | No | Overrides Keepa's package weight when filled |
+| `prep_cost` | No | Defaults to $0 |
 
-**Portable mode** (no env var): create a folder named `sa-rebuild-data` next
-to the binary. The app uses that instead of the home folder. Good for
-running off a USB stick — everything stays on the stick.
+**Excel tip:** format the `upc` column as **Plain text** before pasting,
+otherwise long codes turn into scientific notation (`8.83503E+11`).
 
-**How to set env vars:**
+You can list the same UPC/ASIN multiple times at different costs to
+find the break-even price.
 
-- **Mac**: open Terminal and prefix the launch command, e.g.
-  ```bash
-  SA_REBUILD_HOME=~/Dropbox/sa-rebuild open /Applications/sa-rebuild.app
-  ```
-  For a permanent setting, add `export SA_REBUILD_HOME=...` to `~/.zshrc`.
-- **Windows**: Search "Environment Variables" → Edit user variables → New →
-  enter the name and value → OK. Restart `sa-rebuild.exe`.
+### Step 3 — Run the analysis
 
-For the long form (Gatekeeper bypass, troubleshooting, label meanings,
-running on a schedule), read [`USER_GUIDE.md`](USER_GUIDE.md).
+1. Open the app URL above.
+2. Paste your Keepa API key in the **left sidebar** under "Setup". It is
+   used only for this session and never stored in the code or repo.
+3. Upload your CSV with the drag-and-drop box in section 2.
+4. Click **Start run**.
+5. Watch live progress. Each row takes roughly 7–8 minutes at steady
+   state (Keepa Pro gives you 60 tokens, refilling 1/min; each product
+   fetch costs ~6–8 tokens).
+6. When the run finishes, click **Download report** to save the CSV.
+
+### Step 4 — If a run is interrupted
+
+If you close the browser tab mid-run, the worker stops. The next time
+you open the app the **Resume previous run** button will appear — click
+it to pick up from where it left off. The output CSV is appended
+row-by-row as the run progresses, so completed rows are never lost.
+
+### Understanding the report
+
+See the [Output](#output) section below for a full column reference and
+an explanation of the Buy / Caution / Skip labels.
 
 ---
 
-<a name="releasing-trigger-the-build"></a>
-## Releasing — trigger the build that produces the binaries
+## For developers — run locally or contribute
 
-The Mac and Windows binaries are built **automatically by GitHub Actions** —
-you don't need a Mac or Windows machine yourself to ship them. Two paths:
+### Requirements
 
-### Path A — Tag a release (the normal way)
+- Python 3.10 or later
+- A Keepa Pro API key
+
+### Setup
 
 ```bash
-# from the repo root, on the master branch:
-git tag v0.1.0
-git push origin v0.1.0
+git clone https://github.com/Emanoid/selleramp_rebuild.git
+cd selleramp_rebuild
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
 ```
 
-GitHub Actions then:
+Optionally create a `.env` file in the repo root to avoid typing your
+key every session:
 
-1. Spins up a macOS runner and a Windows runner (free for public repos).
-2. Runs the unit tests on both (fails fast if anything broke).
-3. Builds the bundle with PyInstaller on each.
-4. Zips the result and **attaches `sa-rebuild-mac.zip` and
-   `sa-rebuild-windows.zip` to the v0.1.0 Release page** under
-   "Releases" on your repo home.
+```
+KEEPA_API_KEY=your_key_here
+```
 
-End users grab them from `https://github.com/<you>/<repo>/releases/latest`.
-
-Total time: ~10–15 minutes from tag push to binaries downloadable.
-
-### Path B — Manual build without tagging (dry run)
-
-If you want to confirm the build works before tagging:
-
-1. Go to your repo's **Actions** tab on GitHub.
-2. Click **Build and release desktop binaries** in the left list.
-3. Click **Run workflow** → choose `master` → click the green button.
-4. After it finishes (~10 min), click into the run and download
-   `sa-rebuild-mac.zip` / `sa-rebuild-windows.zip` from the **Artifacts**
-   section at the bottom. (Workflow-dispatch artifacts aren't published as
-   a Release — they're only available to repo collaborators.)
-
-> If you don't see the workflow in the Actions tab, the workflow file
-> (`.github/workflows/release.yml`) isn't on your **default branch** yet.
-> Merge it from `working` to `master` (or whichever branch is default).
-
-### Building locally for development (advanced)
-
-You don't need this unless you're debugging the bundling itself.
+### Run the web app locally
 
 ```bash
-# Mac:
-packaging/build-mac.sh
-# → produces dist/sa-rebuild.app
-
-# Windows (run from cmd.exe in repo root):
-packaging\build-windows.bat
-# → produces dist\sa-rebuild\sa-rebuild.exe
-
-# Cross-platform: just run the Streamlit UI from source, no bundling:
 streamlit run src/sa_rebuild/web/app.py
 ```
 
----
+Streamlit opens the browser automatically. The app is identical to the
+hosted version.
 
-## For developers — CLI / library use
-
-Everything below is for developers who want to run the analysis from the
-command line or extend the codebase.
-
-## Token reality
-
-Keepa Pro = **60-token bucket, refill 1/min**. A full product fetch ≈ **6–8
-tokens**. So you can burst ~7–10 products instantly, then steady-state ~1
-product every 7–8 minutes.
-
-A 100-row CSV ≈ 11–13 hours wall time. Sibling-variation fetches add ~7
-tokens each. The tool is built for this:
-
-- Every-row state checkpoint (`state/run_<id>.json` + `state/last_run.json`)
-- Append-on-row CSV output (usable mid-run)
-- 24h on-disk response cache (`cache/keepa.sqlite`)
-- Graceful pause when wait > `runtime.max_wait_minutes` — exit 0 with a clear
-  resume message
-- `sa-rebuild resume` (no args) picks up where the last run left off
-
-## Install
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e .
-cp .env.example .env     # add your KEEPA_API_KEY
-```
-
-### Recognized environment variables
-
-| Variable | What it does |
-|---|---|
-| `KEEPA_API_KEY` | Your Keepa Pro key. Read by `config.AppConfig.load()` if `~/.sa-rebuild/settings.json` doesn't have one. The `.env` file (via `python-dotenv`) is also auto-loaded. |
-| `SA_REBUILD_HOME` | Override the data folder (cache/state/output/input/settings live here). Defaults to `~/.sa-rebuild/`. Useful for tests, CI, sandboxed runs, or shipping the app to use a portable folder. |
-
-## Input CSV
-
-Required: `cost`, plus **at least one** of `upc` or `asin`. Optional:
-`weight_lbs` (overrides Keepa's package weight), `prep_cost`.
-
-```csv
-upc,asin,cost,weight_lbs,prep_cost
-028800127321,,8.91,0.73,0.00
-,B005ET6J2K,8.91,0.73,0.00
-883503388642,,31.43,0.40,0.00
-```
-
-**Rules:**
-- `asin` wins when both columns are filled on the same row (skips UPC→ASIN
-  resolution).
-- Blank `weight_lbs` → Keepa's package weight is used (less accurate).
-- Blank `prep_cost` → treated as $0.
-- The same UPC/ASIN on multiple rows is fine — each row evaluates
-  independently against its own `cost`. Useful for "at what cost would this
-  pencil out?" analysis.
-
-**Excel gotcha:** format the `upc` column as **Plain text** before pasting,
-otherwise long codes become scientific notation (`8.83503E+11`). ASINs are
-text-safe.
-
-## Run
-
-```bash
-sa-rebuild run --input input/products.csv
-# custom output path:
-sa-rebuild run -i input/products.csv -o output/today.csv
-# also score up to 10 sibling variations per variation parent (costs ~7
-# tokens per sibling fetched + 7 for the parent monthly_sales lookup):
-sa-rebuild run -i input/products.csv --variations 10
-# strip the column-help row (cleaner for pandas/Excel imports):
-sa-rebuild run -i input/products.csv --no-descriptions
-```
-
-Output goes to `output/report_<timestamp>.csv` by default.
-
-If your token bucket runs out mid-run, you'll see:
-
-```
-Pausing run. 47 rows remain. Resume with: sa-rebuild resume
-```
-
-After tokens regenerate, just run:
-
-```bash
-sa-rebuild resume
-```
-
-It re-reads `state/last_run.json`, skips already-done rows, and continues
-appending to the same output CSV.
-
-## Other commands
-
-```bash
-sa-rebuild status                                # last-run progress
-sa-rebuild cache clear --older-than-hours 24
-sa-rebuild resume --run-id 20260425T120000-abc123
-```
-
-## Output
-
-Every report begins with the header row, then a **column-help row** in plain
-English (the `upc` cell of that row is tagged `[COLUMN HELP — skip this row]`
-so you can filter it out). Disable with `--no-descriptions`. To skip it in
-pandas: `pd.read_csv(path, skiprows=[1])`.
-
-### Columns
-
-| Column | What it means |
-|---|---|
-| `upc`, `asin`, `title`, `brand` | Identifiers + name |
-| `category_root`, `category_leaf` | Top-level + most-specific Amazon category. Leaf is used for BSR%. |
-| `is_variation`, `variation_count` | True + sibling count when this is a child of a variation parent. |
-| `viable_variations` | Sibling ASINs whose **current buy box ≥ recommended_sell_price** AND **total live sellers < `variations.max_seller_count`**. Format: `ASIN (Size:8, Color:White) bb=$45.00 sellers=4 \| ASIN2 (...)`. Empty unless `--variations N` set. |
-| `cost`, `weight_lbs`, `inbound_cost`, `prep_cost` | Your inputs + derived inbound shipping. |
-| `current_lowest_fba_new` | Cheapest live FBA-New offer. Blank if none. |
-| `current_lowest_live_new` | Cheapest live New offer of any fulfillment. |
-| `current_buy_box` | Buy-box price right now (with shipping). Blank when buy box is empty. |
-| `buy_box_30d_avg` | Time-weighted mean buy-box price over last 30 days. |
-| `buy_box_volatility_cv` | stddev/mean of buy-box price over last 90 days. <0.05 = stable. |
-| `buybox_oos_pct_30d` | % of last 30 days buy box was empty (no eligible seller). |
-| `recommended_sell_price` | See **Pricing rule** below. |
-| `referral_fee`, `fba_fulfillment_fee`, `misc_fee`, `total_fees` | Amazon-side fees. |
-| `estimated_profit`, `roi_pct` | sell − cost − total_fees − inbound − prep, then ROI. |
-| `monthly_sales` | Estimated units sold per month for THIS ASIN (the variation child). Source priority: Keepa `monthlySold` → `monthlySoldHistory` latest → `salesRankDrops30`. |
-| `parent_monthly_sales` | Same metric for the variation **parent** (sums siblings). Only populated when `--variations N>0`. |
-| `bsr`, `bsr_pct` | Current rank in leaf category, plus that as % of category size. |
-| `live_fba_seller_count`, `live_fbm_seller_count` | Distinct currently-live sellers. |
-| `top_buybox_seller_name` / `_share_pct` | Most-frequent buy-box winner in last 30d. |
-| `amazon_buybox_share_pct`, `amazon_dominant`, `brand_dominant`, `dominance_label` | Competition diagnostics. |
-| `storefront_url` | Click-through to the listing. |
-| `viability_label` | One-glance verdict — see below. |
-| `notes` | Free-text caveats. |
-
-### Pricing rule (`recommended_sell_price`)
-
-1. Anchor on the 30-day buy-box average.
-2. If avg30 < current buy box (market moved up recently) → use **mean(avg30,
-   current_bb)** so we don't chase the spike.
-3. Otherwise (avg30 ≥ current_bb, market dipped or unchanged) → use avg30.
-4. If no buy-box data at all → fall back to lowest current live listing.
-
-### Viability labels
-
-- `Buy` — profit ≥ $1.00, ROI ≥ 30%, not dominated, BSR in top 2%, ≤15 live FBA sellers
-- `Caution — thin margin` — profitable but below thresholds
-- `Caution — crowded` — profitable but too many FBA sellers
-- `Skip — Sell price below cost` — market is below your cost; do not buy
-- `Skip — Amazon dominant` — Amazon held buy box ≥ 70% of last 90 days
-- `Skip — Brand dominant (heuristic)` — single 3P seller named like the brand held buy box ≥ 60% of last 90 days. Always verify manually.
-- `Skip — Slow seller` — BSR > 2% of leaf category
-- `Pass` — not profitable
-
-## Variations
-
-Disabled by default. Each sibling fetch costs ~7 Keepa tokens, plus 7 for the
-parent if you want `parent_monthly_sales`. Turn on per-run:
-
-```bash
-sa-rebuild run -i input/products.csv --variations 10
-```
-
-Or persistently in `config.yaml`:
-
-```yaml
-variations:
-  fetch_max: 10                # 0 disables; CLI flag overrides
-  max_seller_count: 10         # sibling viable if total live sellers < this
-  buy_box_min_ratio: 1.0       # sibling buy box must be >= this × main rec_price
-```
-
-The `viable_variations` column lists only siblings that pass both checks, so
-when your scanned UPC doesn't pencil out you can ask the supplier whether
-they have one of the listed sibling sizes/colors instead.
-
-**Why per-child stats matter**: SellerAmp's headline "Est. Sales" is the
-parent total summed across all siblings (for Crocs that's 1630/mo across 269
-size+color combos). The per-child number — what your specific size+color
-actually moves — is what predicts whether your unit sells. The tool reports
-the per-child number by default and the parent number only when
-`--variations N>0`.
-
-## Tuning (`config.yaml`)
-
-- **Fees** — inbound $/lb, misc%, prep, referral overrides per category. Config
-  overrides win over Keepa's value, so e.g. `Clothing, Shoes & Jewelry: 0.17`
-  forces 17% (Amazon's apparel rate >$15) even when Keepa returns 15%.
-- **Pricing** — `cv_stable` / `cv_moderate` thresholds for the volatility-based
-  recommended-price hedging.
-- **Competition** — Amazon/brand dominance %s, fuzzy-match score for brand
-  detection.
-- **Viability** — min profit, min ROI, max BSR%, max FBA seller count.
-- **Variations** — `fetch_max`, `max_seller_count`, `buy_box_min_ratio`.
-- **Category sizes** — used to compute BSR%. Add the leaf categories you
-  source from often. Missing categories yield `bsr_pct=None` (the row is
-  reported but the slow-seller filter doesn't fire — better than mis-classifying).
-
-The defaults mirror the SellerAmp profile screenshot you provided
-(inbound $0.80/lb, misc 6.63%, max BSR 2%, min profit $1.00, min ROI 30%).
-
-## Tests
+### Run the tests
 
 ```bash
 pytest -q
 ```
 
-42 offline tests covering:
+42 offline tests covering fees parity, pricing rule, dominance scoring,
+viability labels, variation fetching, CSV I/O, and state durability.
+No API key is required — all Keepa responses are mocked.
 
-- Fees parity (incl. SellerAmp apparel referral override)
-- Pricing rule (avg30 vs current buy box, all fallback branches)
-- Live-offer filtering via Keepa's `liveOffersOrder` (excludes the historical
-  offers Keepa also returns in the same payload)
-- Dominance scoring (Amazon, brand-fuzzy-match, open-market)
-- Viability labels (incl. below-cost short-circuit)
-- Variation viability (sibling fetch cap, threshold filtering, parent
-  monthly-sales fetch)
-- CSV input (UPC-only, ASIN-only, ASIN-wins-when-both, distinct row IDs for
-  duplicate UPCs)
-- Description-row writer (with and without)
-- State durability (atomic write, resume roundtrip, duplicate-UPC tracking)
+### Deploy to Streamlit Community Cloud
 
-## Known limitations
+1. Fork or push the `main` branch to a public GitHub repo.
+2. Go to [share.streamlit.io](https://share.streamlit.io), sign in with
+   GitHub, click **New app**.
+3. Select the repo, branch `main`, main file
+   `src/sa_rebuild/web/app.py`.
+4. Click **Deploy**. No secrets needed — the API key is entered via the
+   sidebar UI.
 
-- **Brand-dominance is a heuristic.** Brand name vs seller display name fuzzy
-  match is imperfect — the brand often sells through a 3P account that
-  doesn't match the brand name. Always tagged "(heuristic)" alongside the
-  share %, so you can override.
-- **Sales estimates are estimates.** Keepa's `monthlySold` is a reflection of
-  Amazon's "X+ bought" badge, not ground truth.
-- **FBA fee tables drift.** `analytics/fees.py` prefers Keepa's
-  `fbaFees.pickAndPackFee` when present; the local fallback table is coarse
-  — update when Amazon publishes new rates.
-- **Per-child stats by design.** The tool reports per-ASIN (variation child)
-  metrics, not parent-aggregate. This is more accurate for sourcing
-  decisions, but differs from SellerAmp's default headline numbers. Use
-  `--variations N` to also fetch the parent and siblings.
-- **No own-inventory awareness.** Doesn't factor stock you already hold.
-
-## Layout
+### Project layout
 
 ```
 src/sa_rebuild/
-├── cli.py              # typer entrypoint (run, resume, status, cache)
-├── config.py           # AppConfig (pydantic) loaded from config.yaml + .env
-├── keepa_client.py     # token-aware Keepa wrapper + cache
-├── token_bucket.py     # local mirror of Keepa's bucket
-├── cache.py            # sqlite TTL cache
-├── state.py            # atomic per-row checkpoints, resume
-├── csv_io.py           # input parsing + append-on-row report writer
-│                       #   (incl. COLUMN_DESCRIPTIONS for the help row)
+├── web/
+│   └── app.py          # Streamlit UI (entry point for Streamlit Cloud)
+├── cli.py              # Typer CLI (run, resume, status, cache)
+├── config.py           # AppConfig (Pydantic) — loaded from config.yaml + .env
+├── runner.py           # Orchestrates per-row processing, token waits
+├── keepa_client.py     # Token-aware Keepa wrapper + 24h SQLite cache
+├── token_bucket.py     # Local mirror of Keepa's token bucket
+├── cache.py            # SQLite TTL cache
+├── state.py            # Atomic per-row checkpoints + resume
+├── csv_io.py           # Input parsing + append-on-row report writer
 ├── keepa_data.py       # CSV/timestamp/seller-history/live-offer helpers
-├── report.py           # assemble per-UPC output row
+├── report.py           # Assembles the per-UPC output row
 └── analytics/
-    ├── pricing.py      # recommended sell price (avg30 + current buy box rule)
+    ├── pricing.py      # Recommended sell price (avg30 + buy box rule)
     ├── competition.py  # Amazon/brand dominance, FBA/FBM seller counts
     ├── sales.py        # monthlySold + leaf-category BSR percentile
-    ├── fees.py         # referral + FBA fulfill + inbound + misc%
-    ├── variations.py   # opt-in sibling viability + parent monthly sales
-    └── viability.py    # composite Buy/Caution/Skip label
+    ├── fees.py         # Referral + FBA + inbound + misc%
+    ├── variations.py   # Sibling viability + parent monthly sales
+    └── viability.py    # Composite Buy / Caution / Skip label
+tests/
+.streamlit/
+└── config.toml         # Upload limit (50 MB), headless mode
+config.yaml             # Tunable thresholds (fees, BSR%, ROI, etc.)
+requirements.txt        # Python dependencies for Streamlit Cloud
 ```
+
+### Tuning (`config.yaml`)
+
+| Section | What to change |
+|---|---|
+| `fees` | Inbound $/lb, misc %, prep cost, per-category referral overrides |
+| `pricing` | CV thresholds for volatility-based price hedging |
+| `competition` | Amazon/brand dominance cutoffs, fuzzy-match score |
+| `viability` | Min profit ($1), min ROI (30%), max BSR% (2%), max FBA sellers |
+| `variations` | `fetch_max`, `max_seller_count`, `buy_box_min_ratio` |
+| `category_sizes` | Leaf categories used to compute BSR%. Add ones you source from. |
+
+Defaults mirror a SellerAmp FBA profile: inbound $0.80/lb, misc 6.63%,
+max BSR 2%, min profit $1.00, min ROI 30%.
+
+### Environment variables
+
+| Variable | What it does |
+|---|---|
+| `KEEPA_API_KEY` | Pre-fills the API key instead of typing it in the sidebar. |
+| `SA_REBUILD_HOME` | Override the data folder (cache, state, output, input). Defaults to `~/.sa-rebuild/`. |
+
+---
+
+## Token reality
+
+Keepa Pro = **60-token bucket, refilling 1/min**. A full product fetch
+costs roughly **6–8 tokens**. That means:
+
+- Burst: ~7–10 products back-to-back before the bucket runs dry.
+- Steady state: ~1 product every 7–8 minutes.
+- 100-row CSV ≈ 11–13 hours wall time.
+- Sibling-variation fetches add ~7 tokens per sibling.
+
+The app is built for this reality:
+
+- Per-row state checkpoints (`state/run_<id>.json`)
+- Append-on-row CSV output — usable and downloadable mid-run
+- 24h on-disk response cache — re-running the same UPC costs 0 tokens
+- Auto-pause when wait exceeds `runtime.max_wait_minutes`; resume picks
+  up exactly where it left off
+
+---
+
+## Output
+
+Every report starts with a header row and a **column-help row** (the
+`upc` cell is tagged `[COLUMN HELP — skip this row]` so you can filter
+it in Excel). To skip it in pandas: `pd.read_csv(path, skiprows=[1])`.
+
+### Columns
+
+| Column | What it means |
+|---|---|
+| `upc`, `asin`, `title`, `brand` | Identifiers and product name |
+| `category_root`, `category_leaf` | Top-level + most-specific Amazon category |
+| `is_variation`, `variation_count` | True + sibling count when this is a variation child |
+| `viable_variations` | Siblings whose buy box ≥ rec price AND sellers < threshold. Populated only when Variations > 0. |
+| `cost`, `weight_lbs`, `inbound_cost`, `prep_cost` | Your inputs + derived inbound shipping |
+| `current_lowest_fba_new` | Cheapest live FBA-New offer |
+| `current_lowest_live_new` | Cheapest live New offer (any fulfillment) |
+| `current_buy_box` | Buy-box price right now |
+| `buy_box_30d_avg` | Time-weighted mean buy-box price over last 30 days |
+| `buy_box_volatility_cv` | stddev/mean over last 90 days. <0.05 = stable |
+| `buybox_oos_pct_30d` | % of last 30 days the buy box was empty |
+| `recommended_sell_price` | See pricing rule below |
+| `referral_fee`, `fba_fulfillment_fee`, `misc_fee`, `total_fees` | Amazon-side fees |
+| `estimated_profit`, `roi_pct` | sell − cost − fees − inbound − prep, then ROI |
+| `monthly_sales` | Estimated units/month for this ASIN |
+| `parent_monthly_sales` | Same for the variation parent (populated when Variations > 0) |
+| `bsr`, `bsr_pct` | Current rank + rank as % of leaf category size |
+| `live_fba_seller_count`, `live_fbm_seller_count` | Currently-live seller counts |
+| `top_buybox_seller_name` / `_share_pct` | Most-frequent buy-box winner in last 30 days |
+| `amazon_buybox_share_pct`, `amazon_dominant`, `brand_dominant`, `dominance_label` | Competition diagnostics |
+| `storefront_url` | Direct link to the Amazon listing |
+| `viability_label` | One-glance verdict |
+| `notes` | Free-text caveats |
+
+### Pricing rule
+
+1. Anchor on the 30-day buy-box average.
+2. If avg30 < current buy box (market spiked) → use **mean(avg30, current_bb)** to avoid chasing the spike.
+3. If avg30 ≥ current buy box (market dipped or unchanged) → use avg30.
+4. No buy-box data → fall back to the lowest current live listing.
+
+### Viability labels
+
+| Label | Meaning |
+|---|---|
+| `Buy` | Profit ≥ $1, ROI ≥ 30%, not dominated, BSR in top 2%, ≤ 15 live FBA sellers |
+| `Caution — thin margin` | Profitable but below profit/ROI thresholds |
+| `Caution — crowded` | Profitable but too many FBA sellers |
+| `Skip — Sell price below cost` | Market price is below your cost |
+| `Skip — Amazon dominant` | Amazon held buy box ≥ 70% of last 90 days |
+| `Skip — Brand dominant (heuristic)` | Single 3P seller matching the brand name held ≥ 60%. Verify manually. |
+| `Skip — Slow seller` | BSR > 2% of leaf category |
+| `Pass` | Not profitable |
+
+---
+
+## Variations (optional)
+
+Disabled by default. Enable in the sidebar slider or in `config.yaml`:
+
+```yaml
+variations:
+  fetch_max: 10          # 0 = disabled; sidebar slider overrides
+  max_seller_count: 10   # sibling viable if total live sellers < this
+  buy_box_min_ratio: 1.0 # sibling buy box must be ≥ this × rec_price
+```
+
+Each sibling fetch costs ~7 tokens. Use when the scanned UPC doesn't
+pencil out but you want to check whether a different size or color of
+the same product does.
+
+**Why per-child stats matter:** SellerAmp's headline "Est. Sales" is the
+parent total across all siblings (e.g. 1,630/mo across 269
+size+color combos for Crocs). The per-child number — what your specific
+size/color actually moves — is what predicts whether your unit sells.
+This tool reports the per-child number by default.
+
+---
+
+## Known limitations
+
+- **Brand dominance is a heuristic.** Fuzzy name matching between brand
+  and seller is imperfect. Always check manually when flagged.
+- **Sales estimates are estimates.** Keepa's `monthlySold` reflects
+  Amazon's "X+ bought" badge, not verified ground truth.
+- **FBA fee tables drift.** The local fallback fee table is coarse —
+  update `analytics/fees.py` when Amazon publishes new rates.
+- **No own-inventory awareness.** Doesn't factor stock you already hold.
