@@ -51,42 +51,23 @@ spinner in the app briefly while it restarts.
 
 ### What you'll create
 
-A subdomain like `tool.centrallinegroup.com` (or any prefix you choose)
-that points to your Streamlit app. Your main domain and Neo email are
-completely unaffected — email uses MX records, web uses CNAME, they are
-independent.
+A subdomain `tools.centrallinegroup.com` that redirects visitors to
+your Streamlit app. Your main domain and Neo email are completely
+unaffected — email uses MX records, the redirect uses its own record,
+they are independent.
+
+> **Note on custom domains:** Streamlit Community Cloud (free plan)
+> does not support true custom domains — there is no "Custom domain"
+> field in app settings. The approach below uses Namecheap's URL
+> redirect feature. After the redirect the browser address bar will
+> show `centralline-tools.streamlit.app`, but the link
+> `tools.centrallinegroup.com` will work and take people to the right
+> place. True domain masking requires Streamlit's paid Teams plan or
+> self-hosting.
 
 ---
 
-### Step 1 — Pick your subdomain prefix
-
-Decide what you want before the dot. Examples:
-
-- `tool.centrallinegroup.com`
-- `sourcing.centrallinegroup.com`
-- `fba.centrallinegroup.com`
-
----
-
-### Step 2 — Get your Streamlit CNAME target
-
-After deploying in Part 1, your app URL looks like:
-
-```
-https://centralline-tools.streamlit.app
-```
-
-The CNAME target is that hostname **without** `https://`:
-
-```
-centralline-tools.streamlit.app
-```
-
-Keep this handy for the next step.
-
----
-
-### Step 3 — Add the CNAME record in Namecheap
+### Step 1 — Add a URL Redirect Record in Namecheap
 
 1. Log in to **[namecheap.com](https://namecheap.com)**
 2. Click **"Domain List"** in the left sidebar
@@ -97,37 +78,34 @@ Keep this handy for the next step.
 
    | Field | Value |
    |---|---|
-   | **Type** | `CNAME Record` |
-   | **Host** | `tool` *(or whichever prefix you chose — just the part before the dot)* |
-   | **Value** | `centralline-tools.streamlit.app` *(your actual Streamlit URL)* |
+   | **Type** | `URL Redirect Record` |
+   | **Host** | `tools` |
+   | **Value** | `https://centralline-tools.streamlit.app` |
+   | **Redirect type** | `Unmasked` |
    | **TTL** | `Automatic` |
 
 7. Click the **green checkmark** to save
 
----
-
-### Step 4 — Register the custom domain in Streamlit
-
-Streamlit needs to know your domain is pointing at it:
-
-1. Go to your app on [share.streamlit.io](https://share.streamlit.io)
-2. Click the **three-dot menu** (⋮) next to your app → **"Settings"**
-3. Go to the **"General"** tab → find **"Custom domain"**
-4. Enter your full subdomain: `tool.centrallinegroup.com`
-5. Click **"Save"**
+If you previously added a CNAME record for `tool`, delete it — only
+keep this URL Redirect Record for `tools`.
 
 ---
 
-### Step 5 — Wait for DNS propagation
+### Step 2 — Wait for DNS propagation
 
 DNS changes take between **5 minutes and 24 hours** to spread globally
 (usually under 30 minutes). Check progress at
-**[dnschecker.org](https://dnschecker.org)** — type in your subdomain
-and watch for green checkmarks across locations.
+**[dnschecker.org](https://dnschecker.org)**:
 
-Once propagated, visiting `tool.centrallinegroup.com` loads your
-Streamlit app with a valid HTTPS certificate (Streamlit handles SSL
-automatically — nothing extra needed).
+1. Type `tools.centrallinegroup.com` in the search box at the top
+2. Select **A** in the record-type dropdown next to it
+3. Click the blue **Search** button
+
+You'll see a world map with dots — green means that location can see
+your DNS record, red/grey means it hasn't propagated there yet.
+
+Once propagated, visiting `tools.centrallinegroup.com` will redirect
+to `centralline-tools.streamlit.app`.
 
 ---
 
@@ -136,6 +114,5 @@ automatically — nothing extra needed).
 | Task | Where |
 |---|---|
 | Deploy the app | [share.streamlit.io](https://share.streamlit.io) |
-| Add CNAME record | Namecheap → Domain List → Manage → Advanced DNS |
-| Register custom domain | Streamlit app → ⋮ → Settings → General |
-| Check DNS propagation | [dnschecker.org](https://dnschecker.org) |
+| Add URL Redirect Record | Namecheap → Domain List → Manage → Advanced DNS |
+| Check DNS propagation | [dnschecker.org](https://dnschecker.org) — type A record for `tools.centrallinegroup.com` |

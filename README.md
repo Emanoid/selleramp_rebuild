@@ -1,9 +1,10 @@
-# sa-rebuild — FBA Sourcing Calculator
+# CentralLine Sourcing Toolbox
 
-Reads a CSV of UPCs and/or ASINs + wholesale costs and produces a
-per-row viability report — recommended sell price, fees, ROI, monthly
-sales, dominance, storefront link, and a Buy / Caution / Skip verdict —
-using only your Keepa Pro key.
+A suite of internal sourcing tools for Amazon FBA, starting with the
+FBA Calculator. Upload a CSV of UPCs and/or ASINs + wholesale costs and
+get a per-row viability report — recommended sell price, fees, ROI,
+monthly sales, dominance, storefront link, and a Buy / Caution / Skip
+verdict — using only your Keepa Pro key.
 
 Output mirrors a SellerAmp "FBA" profile (US, FBA, New only).
 
@@ -19,7 +20,7 @@ Output mirrors a SellerAmp "FBA" profile (US, FBA, New only).
 No installation required. Open the app in your browser, enter your
 Keepa API key in the sidebar, upload a CSV, click **Start run**.
 
-**App URL:** *(deploy to Streamlit Community Cloud and paste URL here)*
+**App URL:** [tools.centrallinegroup.com](https://tools.centrallinegroup.com) — also directly at [centralline-tools.streamlit.app](https://centralline-tools.streamlit.app)
 
 ### Step 1 — Get your Keepa API key
 
