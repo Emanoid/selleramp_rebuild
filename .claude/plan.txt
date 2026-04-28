@@ -284,4 +284,4 @@
   before you tag a real release.
   3. First-launch warnings are documented in USER_GUIDE.md (Mac Gatekeeper         
   right-click→Open, Windows SmartScreen "More info → Run anyway"). Without paid    
-  signing certs these are unavoidable for unsigned tools.
+  signing certs these are unavoidable for unsigned tools. 
