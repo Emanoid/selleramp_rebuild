@@ -14,17 +14,17 @@ if str(_SRC) not in sys.path:
 from sa_rebuild import __version__
 
 st.set_page_config(
-    page_title="FBA Toolbox",
+    page_title="CentralLine Sourcing Toolbox",
     page_icon="📦",
     layout="wide",
 )
 
-st.title("📦 FBA Toolbox")
-st.caption(f"v{__version__}")
+st.title("📦 CentralLine Sourcing Toolbox")
+st.caption(f"v{__version__} — internal tools for Amazon FBA product sourcing")
 
 st.markdown(
     """
-    A collection of tools for Amazon FBA sourcing and analysis.
+    A suite of sourcing tools built for CentralLine Group.
     Select a tool from the **sidebar** to get started.
     """
 )
@@ -38,8 +38,9 @@ col1, col2 = st.columns(2, gap="large")
 with col1:
     st.markdown("#### FBA Calculator")
     st.markdown(
-        "Upload a CSV of UPCs/ASINs and wholesale costs. "
-        "Get a per-row Buy / Caution / Skip report powered by Keepa — "
-        "fees, ROI, monthly sales, competition, and a recommended sell price."
+        "Upload a CSV of UPCs or ASINs with your wholesale cost. "
+        "Get a per-row Buy / Caution / Skip verdict — recommended sell price, "
+        "fees, ROI, monthly sales, competition analysis, and a direct storefront link. "
+        "Powered by your Keepa Pro key."
     )
     st.info("Select **FBA Calculator** in the sidebar to open this tool.")
