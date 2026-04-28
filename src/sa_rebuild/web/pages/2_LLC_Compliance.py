@@ -239,8 +239,6 @@ def _render_filing_tab(
     has_quarter_filter: bool = False,
 ) -> None:
     rows = _load(category)
-    if not rows:
-        st.info("No filings found. Run the seed script or add rows below.")
 
     # ── filters ──
     years = sorted({r["year"] for r in rows if r.get("year")}, reverse=True)
@@ -255,14 +253,14 @@ def _render_filing_tab(
         and (sel_who == "All" or r.get("assigned_to") == sel_who)
     ]
 
-    if not filtered:
-        st.warning("No rows match the current filters.")
-        return
-
-    original_df = _df(filtered)
     hide = [] if has_confirmation else ["confirmation_number"]
+    original_df = _df(filtered)
 
-    st.caption(f"{len(filtered)} rows — edit Status, Date Filed, Conf. #, or Notes inline then click Save.")
+    if filtered:
+        st.caption(f"{len(filtered)} rows — edit Status, Date Filed, Conf. #, or Notes inline then click Save.")
+    else:
+        st.info("No filings yet — use **➕ Add filing** below to add your first row, or run the seed script to import from Excel.")
+
     edited = st.data_editor(
         original_df,
         column_config=_column_config(hide_extra=hide),
@@ -272,14 +270,15 @@ def _render_filing_tab(
         num_rows="fixed",
     )
 
-    save_col, _ = st.columns([1, 3])
-    if save_col.button("💾 Save changes", type="primary", key=f"save_{category}"):
-        saved = _save_edits(filtered, edited, user_email)
-        if saved:
-            st.success(f"Saved {saved} row(s).")
-            st.rerun()
-        else:
-            st.info("No changes detected.")
+    if filtered:
+        save_col, _ = st.columns([1, 3])
+        if save_col.button("💾 Save changes", type="primary", key=f"save_{category}"):
+            saved = _save_edits(filtered, edited, user_email)
+            if saved:
+                st.success(f"Saved {saved} row(s).")
+                st.rerun()
+            else:
+                st.info("No changes detected.")
 
     st.divider()
 
