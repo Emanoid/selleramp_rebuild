@@ -148,7 +148,8 @@ def _save_edits(original: list[dict], edited_df: pd.DataFrame, user_email: str) 
             new_val = row.get(f)
             old_val = orig.get(f)
             # Normalise NaN/None
-            new_val = None if pd.isna(new_val) if hasattr(new_val, '__class__') and new_val.__class__.__name__ in ('float', 'NoneType') else new_val else new_val
+            if new_val is None or (isinstance(new_val, float) and pd.isna(new_val)):
+                new_val = None
             if new_val != old_val:
                 updates[f] = new_val
         if updates:
