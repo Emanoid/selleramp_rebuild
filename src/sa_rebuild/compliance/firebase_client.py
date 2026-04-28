@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from pathlib import Path
 
+from dotenv import load_dotenv
 import streamlit as st
+
+# Load .env on import so env vars are available regardless of entry point
+load_dotenv()
 
 
 @st.cache_resource(show_spinner=False)
