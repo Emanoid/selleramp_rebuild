@@ -240,7 +240,7 @@ with left:
         data=TEMPLATE_CSV,
         file_name="sa-rebuild-template.csv",
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
     )
     st.caption(
         "Required columns: `cost`, plus at least one of `upc` or `asin`. "
@@ -415,7 +415,7 @@ if finished_event and ss.output_path and Path(ss.output_path).exists():
         data=raw,
         file_name=out.name,
         mime="text/csv",
-        use_container_width=True,
+        width="stretch",
         type="primary",
     )
 
@@ -430,9 +430,9 @@ if finished_event and ss.output_path and Path(ss.output_path).exists():
             "live_fba_seller_count", "viability_label", "notes",
         ]
         cols_present = [c for c in priority_cols if c in df.columns]
-        st.dataframe(df[cols_present], use_container_width=True, height=320)
+        st.dataframe(df[cols_present], width="stretch", height=320)
         with st.expander("Show all columns"):
-            st.dataframe(df, use_container_width=True, height=400)
+            st.dataframe(df, width="stretch", height=400)
     except Exception as e:
         st.caption(f"(Preview failed: {e})")
 

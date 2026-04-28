@@ -42,4 +42,4 @@ with col1:
         "Get a per-row Buy / Caution / Skip report powered by Keepa — "
         "fees, ROI, monthly sales, competition, and a recommended sell price."
     )
-    st.page_link("pages/1_FBA_Calculator.py", label="Open FBA Calculator →")
+    st.info("Select **FBA Calculator** in the sidebar to open this tool.")
