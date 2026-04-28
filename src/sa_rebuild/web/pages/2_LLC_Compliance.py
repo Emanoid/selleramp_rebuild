@@ -272,7 +272,8 @@ def _render_filing_tab(
         num_rows="fixed",
     )
 
-    if st.button("💾 Save changes", type="primary", key=f"save_{category}"):
+    save_col, _ = st.columns([1, 3])
+    if save_col.button("💾 Save changes", type="primary", key=f"save_{category}"):
         saved = _save_edits(filtered, edited, user_email)
         if saved:
             st.success(f"Saved {saved} row(s).")
@@ -280,23 +281,39 @@ def _render_filing_tab(
         else:
             st.info("No changes detected.")
 
-    # ── add new row ──────────────────────────────────────────────────────────
-    with st.expander("➕ Add a filing row"):
+    st.divider()
+
+    # ── action bar ───────────────────────────────────────────────────────────
+    action_key = f"action_{category}"
+    st.session_state.setdefault(action_key, None)
+
+    btn1, btn2, btn3, _ = st.columns([1, 1, 1, 3])
+    if btn1.button("➕ Add filing", key=f"btn_add_{category}", use_container_width=True):
+        st.session_state[action_key] = None if st.session_state[action_key] == "add" else "add"
+    if btn2.button("🗑️ Delete", key=f"btn_del_{category}", use_container_width=True):
+        st.session_state[action_key] = None if st.session_state[action_key] == "delete" else "delete"
+    if btn3.button("🕐 History", key=f"btn_hist_{category}", use_container_width=True):
+        st.session_state[action_key] = None if st.session_state[action_key] == "history" else "history"
+
+    active = st.session_state[action_key]
+
+    # ── add panel ────────────────────────────────────────────────────────────
+    if active == "add":
+        st.markdown("#### ➕ Add filing row")
         with st.form(f"add_{category}", clear_on_submit=True):
             ac1, ac2 = st.columns(2)
-            new_type  = ac1.text_input("Filing type")
-            new_jur   = ac2.selectbox("Jurisdiction", ["Federal", "New Jersey", "N/A"])
-            ac3, ac4  = st.columns(2)
-            new_year  = ac3.number_input("Year", min_value=2024, max_value=2035,
-                                         value=date.today().year, step=1)
-            new_due   = ac4.date_input("Due date", value=None)
-            ac5, ac6  = st.columns(2)
-            new_who   = ac5.selectbox("Assigned to", _ASSIGNED_OPTIONS)
-            new_per   = ac6.text_input("Period label", placeholder="e.g. Q2 2026 or 2026")
+            new_type = ac1.text_input("Filing type *")
+            new_jur  = ac2.selectbox("Jurisdiction", ["Federal", "New Jersey", "N/A"])
+            ac3, ac4 = st.columns(2)
+            new_year = ac3.number_input("Year", min_value=2024, max_value=2035,
+                                        value=date.today().year, step=1)
+            new_due  = ac4.date_input("Due date", value=None)
+            ac5, ac6 = st.columns(2)
+            new_who  = ac5.selectbox("Assigned to", _ASSIGNED_OPTIONS)
+            new_per  = ac6.text_input("Period label", placeholder="e.g. Q2 2026 or 2026")
             new_notes = st.text_input("Notes")
-            if has_confirmation:
-                new_conf = st.text_input("Confirmation #")
-            add_ok = st.form_submit_button("Add row")
+            new_conf  = st.text_input("Confirmation #") if has_confirmation else None
+            add_ok = st.form_submit_button("Add row", type="primary")
 
         if add_ok:
             if not new_type:
@@ -313,38 +330,40 @@ def _render_filing_tab(
                     "due_date":            new_due,
                     "status":              "Pending",
                     "date_filed":          None,
-                    "confirmation_number": new_conf if has_confirmation else None,
+                    "confirmation_number": new_conf,
                     "assigned_to":         new_who,
                     "notes":               new_notes,
                 }, user_email)
                 st.success(f"Added: {new_type}")
+                st.session_state[action_key] = None
                 st.rerun()
 
-    # ── delete a row ─────────────────────────────────────────────────────────
-    with st.expander("🗑️ Delete a filing row"):
+    # ── delete panel ─────────────────────────────────────────────────────────
+    elif active == "delete":
+        st.markdown("#### 🗑️ Delete a filing row")
         labels = {
-            r["id"]: f"{r.get('period','')} — {r['filing_type']} — {r.get('assigned_to','')}"
+            r["id"]: f"{r.get('period', '')} — {r['filing_type']} — {r.get('assigned_to', '')}"
             for r in filtered
         }
-        if not labels:
-            st.info("No rows to delete.")
-        else:
-            del_id = st.selectbox(
-                "Select filing to delete",
-                options=list(labels.keys()),
-                format_func=lambda k: labels[k],
-                key=f"del_{category}",
-            )
-            if st.button("Delete (cannot be undone)", type="secondary", key=f"del_btn_{category}"):
-                from sa_rebuild.compliance.db import delete_filing
-                delete_filing(del_id)
-                st.success("Deleted.")
-                st.rerun()
+        del_id = st.selectbox(
+            "Select filing to delete",
+            options=list(labels.keys()),
+            format_func=lambda k: labels[k],
+            key=f"del_{category}",
+        )
+        st.warning("This cannot be undone.")
+        if st.button("Confirm delete", type="secondary", key=f"del_btn_{category}"):
+            from sa_rebuild.compliance.db import delete_filing
+            delete_filing(del_id)
+            st.success("Deleted.")
+            st.session_state[action_key] = None
+            st.rerun()
 
-    # ── history ───────────────────────────────────────────────────────────────
-    with st.expander("🕐 View change history for a row"):
+    # ── history panel ─────────────────────────────────────────────────────────
+    elif active == "history":
+        st.markdown("#### 🕐 Change history")
         hist_labels = {
-            r["id"]: f"{r.get('period','')} — {r['filing_type']} — {r.get('assigned_to','')}"
+            r["id"]: f"{r.get('period', '')} — {r['filing_type']} — {r.get('assigned_to', '')}"
             for r in filtered
         }
         hist_id = st.selectbox(
@@ -357,13 +376,13 @@ def _render_filing_tab(
             from sa_rebuild.compliance.db import get_filing_history
             history = get_filing_history(hist_id)
             if not history:
-                st.info("No history yet — changes are logged after the first edit.")
+                st.info("No history yet — changes are logged after the first status edit.")
             else:
                 for h in reversed(history):
                     ts = h.get("changed_at")
                     ts_str = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts)
                     st.markdown(
-                        f"**{ts_str}** — {h.get('changed_by','?')}  \n"
+                        f"**{ts_str}** — {h.get('changed_by', '?')}  \n"
                         f"`{h.get('old_status')}` → `{h.get('new_status')}`"
                         + (f"  \n_{h.get('note')}_" if h.get("note") else "")
                     )
