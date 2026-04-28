@@ -31,7 +31,7 @@ deploy takes 2–4 minutes. You'll see a live log. When it turns green you
 get a URL like:
 
 ```
-https://emanoid-selleramp-rebuild-xxxx.streamlit.app
+https://centralline-tools.streamlit.app
 ```
 
 **Test it** — open that URL, paste your Keepa key in the sidebar, upload
@@ -73,13 +73,13 @@ Decide what you want before the dot. Examples:
 After deploying in Part 1, your app URL looks like:
 
 ```
-https://emanoid-selleramp-rebuild-xxxx.streamlit.app
+https://centralline-tools.streamlit.app
 ```
 
 The CNAME target is that hostname **without** `https://`:
 
 ```
-emanoid-selleramp-rebuild-xxxx.streamlit.app
+centralline-tools.streamlit.app
 ```
 
 Keep this handy for the next step.
@@ -99,7 +99,7 @@ Keep this handy for the next step.
    |---|---|
    | **Type** | `CNAME Record` |
    | **Host** | `tool` *(or whichever prefix you chose — just the part before the dot)* |
-   | **Value** | `emanoid-selleramp-rebuild-xxxx.streamlit.app` *(your actual Streamlit URL)* |
+   | **Value** | `centralline-tools.streamlit.app` *(your actual Streamlit URL)* |
    | **TTL** | `Automatic` |
 
 7. Click the **green checkmark** to save
