@@ -1,8 +1,9 @@
 """LLC Compliance Tracker — Central Line Group LLC."""
 from __future__ import annotations
 
+import io
 import sys
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 from typing import Optional
 
@@ -14,7 +15,7 @@ _SRC = _HERE.parents[3]  # pages/ → web/ → sa_rebuild/ → src/
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-# ── static reference data ────────────────────────────────────────────────────
+# ── static reference data ─────────────────────────────────────────────────────
 
 _COMPANY = {
     "name": "Central Line Group LLC",
@@ -24,30 +25,50 @@ _COMPANY = {
 }
 
 _QUICK_REF = [
-    ("NJ Sales Tax Return",        "Quarterly",  "Jan 31 / Apr 30 / Jul 31 / Oct 31", "LLC",         "nj.gov/taxation"),
-    ("Federal Est. Tax 1040-ES",   "Quarterly",  "Apr 15 / Jun 15 / Sep 15 / Jan 15", "Each member", "irs.gov/payments"),
-    ("NJ Est. Tax NJ-1040-ES",     "Quarterly",  "Apr 15 / Jun 15 / Sep 15 / Jan 15", "Each member", "nj.gov/taxation"),
-    ("Federal Form 1065",          "Annual",     "March 15",                           "LLC",         "irs.gov"),
-    ("NJ Form NJ-1065",            "Annual",     "March 15",                           "LLC",         "nj.gov/taxation"),
-    ("Personal Form 1040",         "Annual",     "April 15",                           "Each member", "irs.gov"),
-    ("Personal NJ-1040",           "Annual",     "April 15",                           "Each member", "nj.gov/taxation"),
-    ("NJ Annual Report ($75)",     "Annual",     "April 30",                           "LLC",         "njportal.com/DOR/annualreports"),
-    ("FinCEN BOI Report",          "One-time ✅", "Filed Apr 27, 2026",                "LLC",         "boiefiling.fincen.gov"),
-    ("NJ LLC Formation",           "One-time ✅", "Filed Apr 27, 2026",                "LLC",         "njportal.com"),
+    ("NJ Sales Tax Return",       "Quarterly",  "Jan 31 / Apr 30 / Jul 31 / Oct 31", "LLC",         "nj.gov/taxation"),
+    ("Federal Est. Tax 1040-ES",  "Quarterly",  "Apr 15 / Jun 15 / Sep 15 / Jan 15", "Each member", "irs.gov/payments"),
+    ("NJ Est. Tax NJ-1040-ES",    "Quarterly",  "Apr 15 / Jun 15 / Sep 15 / Jan 15", "Each member", "nj.gov/taxation"),
+    ("Federal Form 1065",         "Annual",     "March 15",                           "LLC",         "irs.gov"),
+    ("NJ Form NJ-1065",           "Annual",     "March 15",                           "LLC",         "nj.gov/taxation"),
+    ("Personal Form 1040",        "Annual",     "April 15",                           "Each member", "irs.gov"),
+    ("Personal NJ-1040",          "Annual",     "April 15",                           "Each member", "nj.gov/taxation"),
+    ("NJ Annual Report ($75)",    "Annual",     "April 30",                           "LLC",         "njportal.com/DOR/annualreports"),
+    ("FinCEN BOI Report",         "One-time ✅","Filed Apr 27, 2026",                 "LLC",         "boiefiling.fincen.gov"),
+    ("NJ LLC Formation",          "One-time ✅","Filed Apr 27, 2026",                 "LLC",         "njportal.com"),
 ]
 
 _KEY_SITES = [
-    ("IRS Direct Pay",       "irs.gov/payments",                  "Federal est. tax & 1065"),
-    ("NJ Taxation Portal",   "nj.gov/taxation",                   "NJ est. tax, sales tax, NJ-1065"),
-    ("NJ Annual Report",     "njportal.com/DOR/annualreports",    "LLC renewal — $75/yr"),
-    ("FinCEN BOI Filing",    "boiefiling.fincen.gov",             "Beneficial ownership report"),
+    ("IRS Direct Pay",      "irs.gov/payments",               "Federal est. tax & 1065"),
+    ("NJ Taxation Portal",  "nj.gov/taxation",                "NJ est. tax, sales tax, NJ-1065"),
+    ("NJ Annual Report",    "njportal.com/DOR/annualreports", "LLC renewal — $75/yr"),
+    ("FinCEN BOI Filing",   "boiefiling.fincen.gov",          "Beneficial ownership report"),
 ]
 
-_STATUS_OPTIONS  = ["Pending", "Done", "Overdue"]
-_STATUS_ICON     = {"Pending": "⏳", "Done": "✅", "Overdue": "⚠️"}
+_STATUS_OPTIONS   = ["Pending", "Done", "Overdue"]
+_STATUS_ICON      = {"Pending": "⏳", "Done": "✅", "Overdue": "⚠️"}
 _ASSIGNED_OPTIONS = ["LLC", "Kadiatu", "Emmanuel"]
 
-# ── firebase availability check ──────────────────────────────────────────────
+# ── template CSVs ─────────────────────────────────────────────────────────────
+
+_TEMPLATES: dict[str, str] = {
+    "quarterly": (
+        "filing_type,jurisdiction,year,quarter,period,due_date,assigned_to,notes\n"
+        "NJ Sales Tax Return,New Jersey,2026,Q2 (May-Jun),Q2 2026,2026-07-31,LLC,First return\n"
+        "Federal Est. Tax 1040-ES,Federal,2026,Q2 (Apr-Jun),Q2 2026,2026-06-16,Kadiatu,Pay at irs.gov/payments\n"
+    ),
+    "annual": (
+        "filing_type,jurisdiction,year,period,due_date,assigned_to,notes\n"
+        "Federal Form 1065,Federal,2026,2026,2027-03-15,LLC,Partnership return + K-1s\n"
+        "Personal Form 1040,Federal,2026,2026,2027-04-15,Kadiatu,Attach K-1 from Form 1065\n"
+    ),
+    "one_time": (
+        "filing_type,jurisdiction,due_date,assigned_to,notes,confirmation_number\n"
+        "Open Business Bank Account,N/A,2026-05-01,LLC,Use EIN + Certificate of Formation,\n"
+        "Amazon Seller Account Setup,N/A,2026-06-01,LLC,Configure NJ 6.625% tax settings,\n"
+    ),
+}
+
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def _firebase_ready() -> bool:
     try:
@@ -57,10 +78,7 @@ def _firebase_ready() -> bool:
         return False
 
 
-# ── auth helpers ─────────────────────────────────────────────────────────────
-
 def _login_wall() -> Optional[dict]:
-    """Show login form if not authenticated. Returns user dict or None (stops page)."""
     ss = st.session_state
     if ss.get("compliance_user"):
         return ss["compliance_user"]
@@ -92,98 +110,344 @@ def _login_wall() -> Optional[dict]:
     return None
 
 
-# ── data helpers ─────────────────────────────────────────────────────────────
-
 def _load(category: str) -> list[dict]:
     from sa_rebuild.compliance.db import get_filings
     return get_filings(category)
 
 
-def _df(rows: list[dict], extra_hidden: list[str] | None = None) -> pd.DataFrame:
-    cols = [
-        "id", "filing_type", "jurisdiction", "year", "period", "quarter",
-        "due_date", "status", "date_filed", "confirmation_number",
-        "assigned_to", "notes", "category", "updated_by", "updated_at", "created_at",
-    ]
-    df = pd.DataFrame(rows, columns=[c for c in cols if any(c in r for r in rows)])
-    for c in cols:
-        if c not in df.columns:
-            df[c] = None
-    return df[cols]
-
-
-def _column_config(hide_extra: list[str] | None = None) -> dict:
-    hidden = {"id", "category", "year", "quarter", "updated_by", "updated_at", "created_at"}
-    if hide_extra:
-        hidden.update(hide_extra)
-    cfg: dict = {h: None for h in hidden}
-    cfg.update({
-        "filing_type":        st.column_config.TextColumn("Filing", disabled=True),
-        "jurisdiction":       st.column_config.TextColumn("Jurisdiction", disabled=True),
-        "period":             st.column_config.TextColumn("Period", disabled=True),
-        "due_date":           st.column_config.DateColumn("Due Date", disabled=True),
-        "assigned_to":        st.column_config.TextColumn("Assigned To", disabled=True),
-        "status":             st.column_config.SelectboxColumn("Status", options=_STATUS_OPTIONS, required=True),
-        "date_filed":         st.column_config.DateColumn("Date Filed"),
-        "confirmation_number":st.column_config.TextColumn("Conf. #", max_chars=80),
-        "notes":              st.column_config.TextColumn("Notes", max_chars=300, width="large"),
-    })
-    return cfg
-
-
-def _save_edits(original: list[dict], edited_df: pd.DataFrame, user_email: str) -> int:
-    """Detect changed rows and write them to Firestore. Returns number of rows saved."""
-    from sa_rebuild.compliance.db import update_filing
-
-    orig_by_id = {r["id"]: r for r in original}
-    editable_fields = ["status", "date_filed", "confirmation_number", "notes"]
-    saved = 0
-    for _, row in edited_df.iterrows():
-        doc_id = row.get("id")
-        if not doc_id:
+def _parse_date_str(val) -> Optional[date]:
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return None
+    if isinstance(val, date):
+        return val
+    from datetime import datetime
+    s = str(val).strip()
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%b %d, %Y", "%B %d, %Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
             continue
-        orig = orig_by_id.get(doc_id, {})
-        updates = {}
-        for f in editable_fields:
-            new_val = row.get(f)
-            old_val = orig.get(f)
-            # Normalise NaN/None
-            if new_val is None or (isinstance(new_val, float) and pd.isna(new_val)):
-                new_val = None
-            if new_val != old_val:
-                updates[f] = new_val
-        if updates:
-            update_filing(doc_id, updates, user_email)
-            saved += 1
-    return saved
+    return None
 
 
-# ── tab renderers ─────────────────────────────────────────────────────────────
+def _display_df(rows: list[dict], has_confirmation: bool) -> pd.DataFrame:
+    """Build a human-readable, read-only DataFrame for display."""
+    if not rows:
+        cols = ["Filing", "Jurisdiction", "Period", "Due Date", "Status",
+                "Assigned To", "Date Filed", "Notes"]
+        if has_confirmation:
+            cols.append("Conf. #")
+        return pd.DataFrame(columns=cols)
 
-def _render_dashboard(user_email: str) -> None:
-    from sa_rebuild.compliance.db import get_filings
+    records = []
+    for r in rows:
+        status = r.get("status", "Pending")
+        rec = {
+            "Filing":      r.get("filing_type", ""),
+            "Jurisdiction":r.get("jurisdiction", ""),
+            "Period":      r.get("period", ""),
+            "Due Date":    r.get("due_date"),
+            "Status":      f"{_STATUS_ICON.get(status, '•')} {status}",
+            "Assigned To": r.get("assigned_to", ""),
+            "Date Filed":  r.get("date_filed"),
+            "Notes":       r.get("notes", ""),
+        }
+        if has_confirmation:
+            rec["Conf. #"] = r.get("confirmation_number", "") or ""
+        records.append(rec)
+    return pd.DataFrame(records)
 
+
+# ── dialogs ───────────────────────────────────────────────────────────────────
+
+@st.dialog("✏️ Edit Filing", width="large")
+def _edit_modal(row: dict, user_email: str, has_confirmation: bool) -> None:
+    st.markdown(
+        f"**{row['filing_type']}**  \n"
+        f"{row.get('period', '')}  ·  {row.get('jurisdiction', '')}  ·  {row.get('assigned_to', '')}"
+    )
+    st.divider()
+
+    c1, c2 = st.columns(2)
+    cur_status = row.get("status", "Pending")
+    new_status = c1.selectbox(
+        "Status", _STATUS_OPTIONS,
+        index=_STATUS_OPTIONS.index(cur_status) if cur_status in _STATUS_OPTIONS else 0,
+    )
+    new_date_filed = c2.date_input("Date Filed", value=row.get("date_filed") or None)
+
+    if has_confirmation:
+        new_conf = st.text_input("Confirmation #", value=row.get("confirmation_number") or "")
+
+    new_notes = st.text_area("Notes", value=row.get("notes") or "", height=100)
+
+    save, cancel = st.columns(2)
+    if save.button("💾 Save", type="primary", use_container_width=True):
+        from sa_rebuild.compliance.db import update_filing
+        updates: dict = {"status": new_status, "date_filed": new_date_filed, "notes": new_notes}
+        if has_confirmation:
+            updates["confirmation_number"] = new_conf
+        update_filing(row["id"], updates, user_email)
+        st.rerun()
+    if cancel.button("Cancel", use_container_width=True):
+        st.rerun()
+
+
+@st.dialog("➕ Add Filing", width="large")
+def _add_modal(category: str, user_email: str, has_confirmation: bool) -> None:
+    with st.form("add_form", clear_on_submit=True):
+        c1, c2 = st.columns(2)
+        new_type = c1.text_input("Filing type *")
+        new_jur  = c2.selectbox("Jurisdiction", ["Federal", "New Jersey", "N/A"])
+        c3, c4   = st.columns(2)
+        new_year = c3.number_input("Year", min_value=2024, max_value=2035,
+                                   value=date.today().year, step=1)
+        new_due  = c4.date_input("Due date", value=None)
+        c5, c6   = st.columns(2)
+        new_who  = c5.selectbox("Assigned to", _ASSIGNED_OPTIONS)
+        new_per  = c6.text_input("Period label", placeholder="e.g. Q2 2026 or 2026")
+        new_notes = st.text_area("Notes", height=80)
+        new_conf  = st.text_input("Confirmation #") if has_confirmation else None
+        submitted = st.form_submit_button("Add filing", type="primary")
+
+    if submitted:
+        if not new_type.strip():
+            st.error("Filing type is required.")
+        else:
+            from sa_rebuild.compliance.db import add_filing
+            add_filing({
+                "category":            category,
+                "filing_type":         new_type.strip(),
+                "jurisdiction":        new_jur,
+                "year":                int(new_year),
+                "period":              new_per.strip() or str(int(new_year)),
+                "quarter":             None,
+                "due_date":            new_due,
+                "status":              "Pending",
+                "date_filed":          None,
+                "confirmation_number": (new_conf.strip() or None) if new_conf else None,
+                "assigned_to":         new_who,
+                "notes":               new_notes.strip(),
+            }, user_email)
+            st.rerun()
+
+
+@st.dialog("🗑️ Confirm Delete")
+def _delete_modal(rows: list[dict], user_email: str) -> None:
+    st.warning(f"You are about to permanently delete **{len(rows)} filing(s)**.")
+    st.markdown("**Rows to be deleted:**")
+    for r in rows:
+        due = r.get("due_date") or "—"
+        st.markdown(
+            f"- **{r.get('filing_type','')}** — {r.get('period','')} — "
+            f"{r.get('assigned_to','')} — due {due}"
+        )
+    st.divider()
+    confirm, cancel = st.columns(2)
+    if confirm.button("Yes, delete", type="primary", use_container_width=True):
+        from sa_rebuild.compliance.db import delete_filing
+        for r in rows:
+            delete_filing(r["id"])
+        st.rerun()
+    if cancel.button("Cancel", use_container_width=True):
+        st.rerun()
+
+
+@st.dialog("🕐 Change History")
+def _history_modal(row: dict) -> None:
+    st.markdown(
+        f"**{row['filing_type']}** — {row.get('period', '')} — {row.get('assigned_to', '')}"
+    )
+    st.divider()
+    from sa_rebuild.compliance.db import get_filing_history
+    history = get_filing_history(row["id"])
+    if not history:
+        st.info("No history yet — changes are logged after the first status edit.")
+    else:
+        for h in reversed(history):
+            ts = h.get("changed_at")
+            ts_str = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts)
+            st.markdown(
+                f"**{ts_str}** — {h.get('changed_by', '?')}  \n"
+                f"`{h.get('old_status')}` → `{h.get('new_status')}`"
+                + (f"  \n_{h.get('note')}_" if h.get("note") else "")
+            )
+
+
+# ── import ────────────────────────────────────────────────────────────────────
+
+def _process_import(
+    uploaded_file,
+    category: str,
+    user_email: str,
+    has_confirmation: bool,
+) -> None:
+    try:
+        df = pd.read_csv(io.BytesIO(uploaded_file.read()))
+    except Exception as exc:
+        st.error(f"Could not parse CSV: {exc}")
+        return
+
+    if "filing_type" not in df.columns:
+        st.error("CSV must have a `filing_type` column. Download the template for the correct format.")
+        return
+
+    from sa_rebuild.compliance.db import add_filing
+    added, errors = 0, []
+    for i, row in df.iterrows():
+        try:
+            year_val = row.get("year")
+            add_filing({
+                "category":            category,
+                "filing_type":         str(row.get("filing_type", "")).strip(),
+                "jurisdiction":        str(row.get("jurisdiction", "N/A")).strip(),
+                "year":                int(year_val) if pd.notna(year_val) else None,
+                "period":              str(row.get("period", "")).strip(),
+                "quarter":             str(row.get("quarter", "")).strip() or None,
+                "due_date":            _parse_date_str(row.get("due_date")),
+                "status":              "Pending",
+                "date_filed":          None,
+                "confirmation_number": str(row.get("confirmation_number", "")).strip() or None,
+                "assigned_to":         str(row.get("assigned_to", "LLC")).strip(),
+                "notes":               str(row.get("notes", "")).strip(),
+            }, user_email)
+            added += 1
+        except Exception as exc:
+            errors.append(f"Row {i + 1}: {exc}")
+
+    if added:
+        st.success(f"Imported {added} filing(s) successfully.")
+    for e in errors:
+        st.error(e)
+    if added:
+        st.rerun()
+
+
+# ── tab renderer ──────────────────────────────────────────────────────────────
+
+def _render_filing_tab(
+    category: str,
+    user_email: str,
+    has_confirmation: bool = False,
+) -> None:
+    rows = _load(category)
+
+    # ── filters ──────────────────────────────────────────────────────────────
+    years     = sorted({r["year"] for r in rows if r.get("year")}, reverse=True)
+    assignees = sorted({r["assigned_to"] for r in rows if r.get("assigned_to")})
+    f1, f2 = st.columns(2)
+    sel_year = f1.selectbox("Year", ["All"] + [str(y) for y in years], key=f"yr_{category}")
+    sel_who  = f2.selectbox("Assigned to", ["All"] + assignees, key=f"who_{category}")
+
+    filtered = [
+        r for r in rows
+        if (sel_year == "All" or str(r.get("year")) == sel_year)
+        and (sel_who == "All" or r.get("assigned_to") == sel_who)
+    ]
+
+    # ── table (read-only, row-selectable) ────────────────────────────────────
+    display_df = _display_df(filtered, has_confirmation)
+
+    if filtered:
+        st.caption(
+            f"{len(filtered)} rows — click a row to select it, then use the action buttons below."
+        )
+    else:
+        st.info("No filings yet — click **➕ Add Filing** to add one, or import from CSV.")
+
+    event = st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        selection_mode="multi-row",
+        on_select="rerun",
+        key=f"tbl_{category}_{sel_year}_{sel_who}",
+    )
+
+    selected_indices = event.selection.rows if hasattr(event, "selection") else []
+    selected_rows    = [filtered[i] for i in selected_indices if i < len(filtered)]
+    n_sel            = len(selected_rows)
+
+    # ── action bar ───────────────────────────────────────────────────────────
+    st.divider()
+    b1, b2, b3, b4, b5 = st.columns(5)
+
+    if b1.button(
+        "✏️ Edit",
+        disabled=n_sel != 1,
+        use_container_width=True,
+        help="Select exactly one row to edit",
+    ):
+        _edit_modal(selected_rows[0], user_email, has_confirmation)
+
+    if b2.button(
+        f"🗑️ Delete{f' ({n_sel})' if n_sel else ''}",
+        disabled=n_sel == 0,
+        use_container_width=True,
+        help="Select one or more rows to delete",
+    ):
+        _delete_modal(selected_rows, user_email)
+
+    if b3.button("➕ Add Filing", use_container_width=True):
+        _add_modal(category, user_email, has_confirmation)
+
+    if n_sel == 1 and b4.button("🕐 History", use_container_width=True):
+        _history_modal(selected_rows[0])
+    elif n_sel != 1:
+        b4.button("🕐 History", use_container_width=True, disabled=True,
+                  help="Select one row to view its history")
+
+    # ── import / export ──────────────────────────────────────────────────────
+    st.divider()
+    imp1, imp2 = st.columns(2)
+
+    imp1.download_button(
+        "📥 Download CSV template",
+        data=_TEMPLATES[category],
+        file_name=f"{category}_template.csv",
+        mime="text/csv",
+        use_container_width=True,
+        help="Download a blank template to fill in and re-upload",
+    )
+
+    show_import_key = f"show_import_{category}"
+    st.session_state.setdefault(show_import_key, False)
+    if imp2.button("📤 Import from CSV", use_container_width=True):
+        st.session_state[show_import_key] = not st.session_state[show_import_key]
+
+    if st.session_state[show_import_key]:
+        st.markdown("**Upload a filled CSV** (use the template above for the correct column format):")
+        uploaded = st.file_uploader(
+            "Choose CSV file", type=["csv"], key=f"upload_{category}",
+            label_visibility="collapsed",
+        )
+        if uploaded:
+            _process_import(uploaded, category, user_email, has_confirmation)
+
+
+# ── dashboard ─────────────────────────────────────────────────────────────────
+
+def _render_dashboard() -> None:
     q_rows  = _load("quarterly")
     a_rows  = _load("annual")
     ot_rows = _load("one_time")
     all_rows = q_rows + a_rows + ot_rows
 
     def _counts(rows):
-        done  = sum(1 for r in rows if r.get("status") == "Done")
+        done = sum(1 for r in rows if r.get("status") == "Done")
         return done, len(rows)
 
-    q_done, q_tot   = _counts(q_rows)
-    a_done, a_tot   = _counts(a_rows)
+    q_done,  q_tot  = _counts(q_rows)
+    a_done,  a_tot  = _counts(a_rows)
     ot_done, ot_tot = _counts(ot_rows)
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Quarterly",  f"{q_done} / {q_tot} done",  delta=f"{q_tot - q_done} pending")
-    c2.metric("Annual",     f"{a_done} / {a_tot} done",  delta=f"{a_tot - a_done} pending")
-    c3.metric("One-Time",   f"{ot_done} / {ot_tot} done", delta=f"{ot_tot - ot_done} pending")
+    c1.metric("Quarterly",  f"{q_done} / {q_tot} done",  delta=f"{q_tot  - q_done} pending")
+    c2.metric("Annual",     f"{a_done} / {a_tot} done",  delta=f"{a_tot  - a_done} pending")
+    c3.metric("One-Time",   f"{ot_done} / {ot_tot} done",delta=f"{ot_tot - ot_done} pending")
 
     st.divider()
-
-    today = date.today()
+    today   = date.today()
     overdue = [r for r in all_rows
                if r.get("status") != "Done" and r.get("due_date") and r["due_date"] < today]
     upcoming = sorted(
@@ -193,21 +457,19 @@ def _render_dashboard(user_email: str) -> None:
     )[:5]
 
     left, right = st.columns(2)
-
     with left:
         st.subheader(f"⚠️ Overdue ({len(overdue)})")
         if not overdue:
             st.success("Nothing overdue.")
         else:
             for r in sorted(overdue, key=lambda x: x.get("due_date") or date.max):
-                icon = _STATUS_ICON.get(r.get("status", "Pending"), "•")
                 st.markdown(
                     f"**{r['filing_type']}** — {r.get('assigned_to','LLC')}  \n"
                     f"Due: `{r.get('due_date')}` &nbsp;|&nbsp; {r.get('period','')}",
                 )
 
     with right:
-        st.subheader(f"📅 Coming up next")
+        st.subheader("📅 Coming up next")
         if not upcoming:
             st.info("No upcoming filings found.")
         else:
@@ -232,165 +494,9 @@ def _render_dashboard(user_email: str) -> None:
         st.markdown(f"- **{name}** — `{url}` — {note}")
 
 
-def _render_filing_tab(
-    category: str,
-    user_email: str,
-    has_confirmation: bool = False,
-    has_quarter_filter: bool = False,
-) -> None:
-    rows = _load(category)
-
-    # ── filters ──
-    years = sorted({r["year"] for r in rows if r.get("year")}, reverse=True)
-    assignees = sorted({r["assigned_to"] for r in rows if r.get("assigned_to")})
-    f1, f2 = st.columns(2)
-    sel_year = f1.selectbox("Year", ["All"] + [str(y) for y in years], key=f"yr_{category}")
-    sel_who  = f2.selectbox("Assigned to", ["All"] + assignees, key=f"who_{category}")
-
-    filtered = [
-        r for r in rows
-        if (sel_year == "All" or str(r.get("year")) == sel_year)
-        and (sel_who == "All" or r.get("assigned_to") == sel_who)
-    ]
-
-    hide = [] if has_confirmation else ["confirmation_number"]
-    original_df = _df(filtered)
-
-    if filtered:
-        st.caption(f"{len(filtered)} rows — edit Status, Date Filed, Conf. #, or Notes inline then click Save.")
-    else:
-        st.info("No filings yet — use **➕ Add filing** below to add your first row, or run the seed script to import from Excel.")
-
-    edited = st.data_editor(
-        original_df,
-        column_config=_column_config(hide_extra=hide),
-        hide_index=True,
-        use_container_width=True,
-        key=f"editor_{category}_{sel_year}_{sel_who}",
-        num_rows="fixed",
-    )
-
-    if filtered:
-        save_col, _ = st.columns([1, 3])
-        if save_col.button("💾 Save changes", type="primary", key=f"save_{category}"):
-            saved = _save_edits(filtered, edited, user_email)
-            if saved:
-                st.success(f"Saved {saved} row(s).")
-                st.rerun()
-            else:
-                st.info("No changes detected.")
-
-    st.divider()
-
-    # ── action bar ───────────────────────────────────────────────────────────
-    action_key = f"action_{category}"
-    st.session_state.setdefault(action_key, None)
-
-    btn1, btn2, btn3, _ = st.columns([1, 1, 1, 3])
-    if btn1.button("➕ Add filing", key=f"btn_add_{category}", use_container_width=True):
-        st.session_state[action_key] = None if st.session_state[action_key] == "add" else "add"
-    if btn2.button("🗑️ Delete", key=f"btn_del_{category}", use_container_width=True):
-        st.session_state[action_key] = None if st.session_state[action_key] == "delete" else "delete"
-    if btn3.button("🕐 History", key=f"btn_hist_{category}", use_container_width=True):
-        st.session_state[action_key] = None if st.session_state[action_key] == "history" else "history"
-
-    active = st.session_state[action_key]
-
-    # ── add panel ────────────────────────────────────────────────────────────
-    if active == "add":
-        st.markdown("#### ➕ Add filing row")
-        with st.form(f"add_{category}", clear_on_submit=True):
-            ac1, ac2 = st.columns(2)
-            new_type = ac1.text_input("Filing type *")
-            new_jur  = ac2.selectbox("Jurisdiction", ["Federal", "New Jersey", "N/A"])
-            ac3, ac4 = st.columns(2)
-            new_year = ac3.number_input("Year", min_value=2024, max_value=2035,
-                                        value=date.today().year, step=1)
-            new_due  = ac4.date_input("Due date", value=None)
-            ac5, ac6 = st.columns(2)
-            new_who  = ac5.selectbox("Assigned to", _ASSIGNED_OPTIONS)
-            new_per  = ac6.text_input("Period label", placeholder="e.g. Q2 2026 or 2026")
-            new_notes = st.text_input("Notes")
-            new_conf  = st.text_input("Confirmation #") if has_confirmation else None
-            add_ok = st.form_submit_button("Add row", type="primary")
-
-        if add_ok:
-            if not new_type:
-                st.error("Filing type is required.")
-            else:
-                from sa_rebuild.compliance.db import add_filing
-                add_filing({
-                    "category":            category,
-                    "filing_type":         new_type,
-                    "jurisdiction":        new_jur,
-                    "year":                int(new_year),
-                    "period":              new_per or str(new_year),
-                    "quarter":             None,
-                    "due_date":            new_due,
-                    "status":              "Pending",
-                    "date_filed":          None,
-                    "confirmation_number": new_conf,
-                    "assigned_to":         new_who,
-                    "notes":               new_notes,
-                }, user_email)
-                st.success(f"Added: {new_type}")
-                st.session_state[action_key] = None
-                st.rerun()
-
-    # ── delete panel ─────────────────────────────────────────────────────────
-    elif active == "delete":
-        st.markdown("#### 🗑️ Delete a filing row")
-        labels = {
-            r["id"]: f"{r.get('period', '')} — {r['filing_type']} — {r.get('assigned_to', '')}"
-            for r in filtered
-        }
-        del_id = st.selectbox(
-            "Select filing to delete",
-            options=list(labels.keys()),
-            format_func=lambda k: labels[k],
-            key=f"del_{category}",
-        )
-        st.warning("This cannot be undone.")
-        if st.button("Confirm delete", type="secondary", key=f"del_btn_{category}"):
-            from sa_rebuild.compliance.db import delete_filing
-            delete_filing(del_id)
-            st.success("Deleted.")
-            st.session_state[action_key] = None
-            st.rerun()
-
-    # ── history panel ─────────────────────────────────────────────────────────
-    elif active == "history":
-        st.markdown("#### 🕐 Change history")
-        hist_labels = {
-            r["id"]: f"{r.get('period', '')} — {r['filing_type']} — {r.get('assigned_to', '')}"
-            for r in filtered
-        }
-        hist_id = st.selectbox(
-            "Select filing",
-            options=list(hist_labels.keys()),
-            format_func=lambda k: hist_labels[k],
-            key=f"hist_{category}",
-        )
-        if hist_id:
-            from sa_rebuild.compliance.db import get_filing_history
-            history = get_filing_history(hist_id)
-            if not history:
-                st.info("No history yet — changes are logged after the first status edit.")
-            else:
-                for h in reversed(history):
-                    ts = h.get("changed_at")
-                    ts_str = ts.strftime("%Y-%m-%d %H:%M") if hasattr(ts, "strftime") else str(ts)
-                    st.markdown(
-                        f"**{ts_str}** — {h.get('changed_by', '?')}  \n"
-                        f"`{h.get('old_status')}` → `{h.get('new_status')}`"
-                        + (f"  \n_{h.get('note')}_" if h.get("note") else "")
-                    )
-
-
-# ── main page ─────────────────────────────────────────────────────────────────
+# ── main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    # Check Firebase config first
     if not _firebase_ready():
         st.warning(
             "**Firebase not configured.**  \n"
@@ -416,7 +522,6 @@ def main() -> None:
     if not user:
         return
 
-    # ── sidebar user info ────────────────────────────────────────────────────
     with st.sidebar:
         st.markdown(f"**Logged in as**  \n{user['email']}")
         if st.button("Sign out", key="compliance_signout"):
@@ -424,28 +529,26 @@ def main() -> None:
             st.rerun()
         st.divider()
 
-    # ── page header ──────────────────────────────────────────────────────────
     st.title("📋 LLC Compliance Tracker")
     st.caption(
         f"{_COMPANY['name']}  |  EIN: {_COMPANY['ein']}  |  "
         f"NJ ID: {_COMPANY['nj_id']}  |  Formed: {_COMPANY['formed']}"
     )
 
-    # ── tabs ─────────────────────────────────────────────────────────────────
     tab_dash, tab_q, tab_a, tab_ot = st.tabs(
         ["📊 Dashboard", "🗓️ Quarterly", "📆 Annual", "✅ One-Time"]
     )
 
     with tab_dash:
-        _render_dashboard(user["email"])
+        _render_dashboard()
 
     with tab_q:
         st.subheader("Quarterly Filings")
-        _render_filing_tab("quarterly", user["email"], has_confirmation=False, has_quarter_filter=True)
+        _render_filing_tab("quarterly", user["email"])
 
     with tab_a:
         st.subheader("Annual Filings")
-        _render_filing_tab("annual", user["email"], has_confirmation=False)
+        _render_filing_tab("annual", user["email"])
 
     with tab_ot:
         st.subheader("One-Time & Setup Items")
