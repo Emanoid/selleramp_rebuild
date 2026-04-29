@@ -2,18 +2,11 @@
 from __future__ import annotations
 
 import io
-import sys
 from datetime import date
-from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 import streamlit as st
-
-_HERE = Path(__file__).resolve()
-_SRC = _HERE.parents[3]
-if str(_SRC) not in sys.path:
-    sys.path.insert(0, str(_SRC))
 
 # ── static data ───────────────────────────────────────────────────────────────
 
