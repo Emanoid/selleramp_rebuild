@@ -188,8 +188,6 @@ def upsert_all(db, records: list[dict]) -> tuple[int, int]:
         ref = col.document(doc_id)
         exists = ref.get().exists
         if exists:
-            # Preserve status/date_filed/notes already set by the app;
-            # only update structural fields (filing_type, dates, etc.)
             structural = {k: v for k, v in rec.items()
                           if k not in ("status", "date_filed", "notes",
                                        "confirmation_number", "updated_by")}
@@ -202,6 +200,15 @@ def upsert_all(db, records: list[dict]) -> tuple[int, int]:
             ref.set(rec)
             added += 1
     return added, updated
+
+
+def upsert_members(db, names: set[str]) -> int:
+    """Add any name not already in the members collection. Returns count added."""
+    existing = {d.to_dict().get("name", "") for d in db.collection("members").stream()}
+    to_add = sorted(n for n in names if n and n != "LLC" and n not in existing)
+    for name in to_add:
+        db.collection("members").add({"name": name})
+    return len(to_add)
 
 
 # ── main ──────────────────────────────────────────────────────────────────────
@@ -286,9 +293,15 @@ def main() -> None:
                 deleted += 1
         print(f"Deleted {deleted} documents.")
 
+    # Collect assignees before upsert_all mutates the records
+    unique_assignees = {r.get("assigned_to", "") for r in all_records}
+
     print("\nWriting to Firestore…")
     added, updated = upsert_all(db, all_records)
     print(f"Done.  Added: {added}   Updated (structural fields only): {updated}")
+
+    members_added = upsert_members(db, unique_assignees)
+    print(f"Members seeded: {members_added} new name(s) added to the members collection.")
 
 
 if __name__ == "__main__":
