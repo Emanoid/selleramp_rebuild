@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 
 import requests
+import streamlit as st
 
 
 _SIGN_IN_URL = (
@@ -20,9 +21,11 @@ def sign_in(email: str, password: str) -> dict:
     """
     api_key = os.getenv("FIREBASE_WEB_API_KEY")
     if not api_key:
-        raise RuntimeError(
-            "FIREBASE_WEB_API_KEY not set. See compliance_tool_plan.md → Step 6."
-        )
+        api_key = st.secrets["FIREBASE_WEB_API_KEY"]
+        if not api_key:
+            raise RuntimeError(
+                "FIREBASE_WEB_API_KEY not set. See compliance_tool_plan.md → Step 6."
+            )
 
     try:
         resp = requests.post(
