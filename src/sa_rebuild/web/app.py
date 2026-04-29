@@ -20,5 +20,6 @@ st.set_page_config(
 pg = st.navigation([
     st.Page("home.py", title="CentralLine Tools", icon="📦", default=True),
     st.Page("pages/1_FBA_Calculator.py", title="FBA Calculator", icon="🧮"),
+    st.Page("pages/2_LLC_Compliance.py", title="LLC Compliance", icon="📋"),
 ])
 pg.run()
