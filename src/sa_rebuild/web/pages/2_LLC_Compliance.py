@@ -11,44 +11,42 @@ import pandas as pd
 import streamlit as st
 
 _HERE = Path(__file__).resolve()
-_SRC = _HERE.parents[3]  # pages/ -> web/ -> sa_rebuild/ -> src/
+_SRC = _HERE.parents[3]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-# ── static reference data ────────────────────────────────────���────────────────
+# ── static data ───────────────────────────────────────────────────────────────
 
 _COMPANY = {
-    "name": "Central Line Group LLC",
-    "ein": "42-2162254",
-    "nj_id": "0451453963",
+    "name":   "Central Line Group LLC",
+    "ein":    "42-2162254",
+    "nj_id":  "0451453963",
     "formed": "April 27, 2026",
 }
 
 _QUICK_REF = [
-    ("NJ Sales Tax Return",       "Quarterly",  "Jan 31 / Apr 30 / Jul 31 / Oct 31", "LLC",         "nj.gov/taxation"),
-    ("Federal Est. Tax 1040-ES",  "Quarterly",  "Apr 15 / Jun 15 / Sep 15 / Jan 15", "Each member", "irs.gov/payments"),
-    ("NJ Est. Tax NJ-1040-ES",    "Quarterly",  "Apr 15 / Jun 15 / Sep 15 / Jan 15", "Each member", "nj.gov/taxation"),
-    ("Federal Form 1065",         "Annual",     "March 15",                           "LLC",         "irs.gov"),
-    ("NJ Form NJ-1065",           "Annual",     "March 15",                           "LLC",         "nj.gov/taxation"),
-    ("Personal Form 1040",        "Annual",     "April 15",                           "Each member", "irs.gov"),
-    ("Personal NJ-1040",          "Annual",     "April 15",                           "Each member", "nj.gov/taxation"),
-    ("NJ Annual Report ($75)",    "Annual",     "April 30",                           "LLC",         "njportal.com/DOR/annualreports"),
-    ("FinCEN BOI Report",         "One-time ✅","Filed Apr 27, 2026",                 "LLC",         "boiefiling.fincen.gov"),
-    ("NJ LLC Formation",          "One-time ✅","Filed Apr 27, 2026",                 "LLC",         "njportal.com"),
+    ("NJ Sales Tax Return",      "Quarterly", "Jan 31 / Apr 30 / Jul 31 / Oct 31", "LLC",         "nj.gov/taxation"),
+    ("Federal Est. Tax 1040-ES", "Quarterly", "Apr 15 / Jun 15 / Sep 15 / Jan 15", "Each member", "irs.gov/payments"),
+    ("NJ Est. Tax NJ-1040-ES",   "Quarterly", "Apr 15 / Jun 15 / Sep 15 / Jan 15", "Each member", "nj.gov/taxation"),
+    ("Federal Form 1065",        "Annual",    "March 15",                           "LLC",         "irs.gov"),
+    ("NJ Form NJ-1065",          "Annual",    "March 15",                           "LLC",         "nj.gov/taxation"),
+    ("Personal Form 1040",       "Annual",    "April 15",                           "Each member", "irs.gov"),
+    ("Personal NJ-1040",         "Annual",    "April 15",                           "Each member", "nj.gov/taxation"),
+    ("NJ Annual Report ($75)",   "Annual",    "April 30",                           "LLC",         "njportal.com/DOR/annualreports"),
+    ("FinCEN BOI Report",        "One-time", "Filed Apr 27, 2026",                  "LLC",         "boiefiling.fincen.gov"),
+    ("NJ LLC Formation",         "One-time", "Filed Apr 27, 2026",                  "LLC",         "njportal.com"),
 ]
 
 _KEY_SITES = [
-    ("IRS Direct Pay",      "irs.gov/payments",               "Federal est. tax & 1065"),
-    ("NJ Taxation Portal",  "nj.gov/taxation",                "NJ est. tax, sales tax, NJ-1065"),
-    ("NJ Annual Report",    "njportal.com/DOR/annualreports", "LLC renewal — $75/yr"),
-    ("FinCEN BOI Filing",   "boiefiling.fincen.gov",          "Beneficial ownership report"),
+    ("IRS Direct Pay",     "irs.gov/payments",               "Federal est. tax & 1065"),
+    ("NJ Taxation Portal", "nj.gov/taxation",                "NJ est. tax, sales tax, NJ-1065"),
+    ("NJ Annual Report",   "njportal.com/DOR/annualreports", "LLC renewal -- $75/yr"),
+    ("FinCEN BOI Filing",  "boiefiling.fincen.gov",          "Beneficial ownership report"),
 ]
 
 _STATUS_OPTIONS   = ["Pending", "Done", "Overdue"]
 _STATUS_ICON      = {"Pending": "⏳", "Done": "✅", "Overdue": "⚠️"}
 _ASSIGNED_OPTIONS = ["LLC", "Kadiatu", "Emmanuel"]
-
-# ── CSV templates (columns match each sheet in the spreadsheet) ───────────────
 
 _TEMPLATES: dict[str, str] = {
     "quarterly": (
@@ -84,13 +82,13 @@ def _login_wall() -> Optional[dict]:
         return ss["compliance_user"]
 
     st.markdown(
-        f"<h2 style='margin-bottom:0'>🔐 LLC Compliance Login</h2>"
+        "<h2 style='margin-bottom:0'>🔐 LLC Compliance Login</h2>"
         f"<p style='color:grey'>{_COMPANY['name']}</p>",
         unsafe_allow_html=True,
     )
     with st.form("compliance_login", clear_on_submit=False):
-        email    = st.text_input("Email")
-        password = st.text_input("Password", type="password")
+        email     = st.text_input("Email")
+        password  = st.text_input("Password", type="password")
         submitted = st.form_submit_button("Sign in", type="primary")
 
     if submitted:
@@ -130,19 +128,29 @@ def _parse_date_str(val) -> Optional[date]:
     return None
 
 
-def _icon(status: str) -> str:
+def _sicon(status: str) -> str:
     return f"{_STATUS_ICON.get(status, '•')} {status}"
 
 
+def _new_ids(category: str) -> set:
+    return st.session_state.get(f"new_ids_{category}", set())
+
+
 def _display_df(rows: list[dict], category: str) -> pd.DataFrame:
-    """Read-only DataFrame with columns matching the spreadsheet layout."""
+    """Read-only DataFrame matching spreadsheet column layout."""
+    new = _new_ids(category)
+
+    def badge(doc_id: str) -> str:
+        return "New" if doc_id in new else ""
+
     if category == "quarterly":
-        cols = ["#", "Year", "Filing Type", "Jurisdiction", "Quarter",
+        cols = ["", "#", "Year", "Filing Type", "Jurisdiction", "Quarter",
                 "Due Date", "Assigned To", "Status", "Date Filed", "Notes"]
         if not rows:
             return pd.DataFrame(columns=cols)
         return pd.DataFrame([
             {
+                "":             badge(r["id"]),
                 "#":            i,
                 "Year":         r.get("year", ""),
                 "Filing Type":  r.get("filing_type", ""),
@@ -150,7 +158,7 @@ def _display_df(rows: list[dict], category: str) -> pd.DataFrame:
                 "Quarter":      r.get("quarter", "") or r.get("period", ""),
                 "Due Date":     r.get("due_date"),
                 "Assigned To":  r.get("assigned_to", ""),
-                "Status":       _icon(r.get("status", "Pending")),
+                "Status":       _sicon(r.get("status", "Pending")),
                 "Date Filed":   r.get("date_filed"),
                 "Notes":        r.get("notes", ""),
             }
@@ -158,37 +166,39 @@ def _display_df(rows: list[dict], category: str) -> pd.DataFrame:
         ])
 
     elif category == "annual":
-        cols = ["#", "Year", "Filing", "Jurisdiction",
+        cols = ["", "#", "Year", "Filing", "Jurisdiction",
                 "Due Date", "Assigned To", "Status", "Date Filed", "Notes"]
         if not rows:
             return pd.DataFrame(columns=cols)
         return pd.DataFrame([
             {
+                "":             badge(r["id"]),
                 "#":            i,
                 "Year":         r.get("year", ""),
                 "Filing":       r.get("filing_type", ""),
                 "Jurisdiction": r.get("jurisdiction", ""),
                 "Due Date":     r.get("due_date"),
                 "Assigned To":  r.get("assigned_to", ""),
-                "Status":       _icon(r.get("status", "Pending")),
+                "Status":       _sicon(r.get("status", "Pending")),
                 "Date Filed":   r.get("date_filed"),
                 "Notes":        r.get("notes", ""),
             }
             for i, r in enumerate(rows, 1)
         ])
 
-    else:  # one_time — matches OneTime sheet: Item | Jurisdiction | Due/Target | Status | Date Completed | Conf# | Notes
-        cols = ["#", "Item", "Jurisdiction", "Due / Target",
+    else:  # one_time
+        cols = ["", "#", "Item", "Jurisdiction", "Due / Target",
                 "Status", "Date Completed", "Confirmation #", "Notes"]
         if not rows:
             return pd.DataFrame(columns=cols)
         return pd.DataFrame([
             {
+                "":               badge(r["id"]),
                 "#":              i,
                 "Item":           r.get("filing_type", ""),
                 "Jurisdiction":   r.get("jurisdiction", ""),
                 "Due / Target":   r.get("due_date"),
-                "Status":         _icon(r.get("status", "Pending")),
+                "Status":         _sicon(r.get("status", "Pending")),
                 "Date Completed": r.get("date_filed"),
                 "Confirmation #": r.get("confirmation_number", "") or "",
                 "Notes":          r.get("notes", ""),
@@ -208,7 +218,6 @@ def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: st
     st.markdown(f"**{row['filing_type']}** — {row.get('jurisdiction', '')}")
     st.divider()
 
-    # Status + filed date at the top — most commonly updated
     c1, c2 = st.columns(2)
     cur_status = row.get("status", "Pending")
     new_status = c1.selectbox(
@@ -226,7 +235,6 @@ def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: st
 
     new_notes = st.text_area("Notes", value=row.get("notes") or "", height=80)
 
-    # Structural details below the divider
     st.divider()
     st.caption("Structural details — update only if the filing itself changes")
 
@@ -305,14 +313,14 @@ def _add_modal(category: str, user_email: str, has_confirmation: bool) -> None:
         new_due = c3.date_input(due_label, value=None)
         new_who = c4.selectbox("Assigned To", _ASSIGNED_OPTIONS)
 
+        new_year = None
+        new_quarter = None
         if category != "one_time":
             c5, c6 = st.columns(2)
             new_year = c5.number_input("Year", min_value=2024, max_value=2035,
                                        value=date.today().year, step=1)
             if category == "quarterly":
                 new_quarter = c6.text_input("Quarter", placeholder="e.g. Q2 (Apr-Jun)")
-            else:
-                new_quarter = None
 
         new_notes = st.text_area("Notes", height=80)
         new_conf  = st.text_input("Confirmation #") if has_confirmation else None
@@ -323,11 +331,11 @@ def _add_modal(category: str, user_email: str, has_confirmation: bool) -> None:
             st.error(f"{filing_label} is required.")
         else:
             from sa_rebuild.compliance.db import add_filing
-            year_val    = int(new_year) if category != "one_time" else None
-            quarter_val = new_quarter.strip() if (category == "quarterly" and new_quarter) else None
+            year_val    = int(new_year) if new_year else None
+            quarter_val = new_quarter.strip() if new_quarter else None
             period_val  = (f"{quarter_val} {year_val}".strip()
                            if quarter_val else str(year_val or ""))
-            add_filing({
+            new_id = add_filing({
                 "category":            category,
                 "filing_type":         new_type.strip(),
                 "jurisdiction":        new_jur,
@@ -341,6 +349,9 @@ def _add_modal(category: str, user_email: str, has_confirmation: bool) -> None:
                 "assigned_to":         new_who,
                 "notes":               new_notes.strip(),
             }, user_email)
+            ids = st.session_state.get(f"new_ids_{category}", set())
+            ids.add(new_id)
+            st.session_state[f"new_ids_{category}"] = ids
             st.rerun()
 
 
@@ -349,16 +360,17 @@ def _delete_modal(rows: list[dict], user_email: str) -> None:
     st.warning(f"You are about to permanently delete **{len(rows)} filing(s)**.")
     st.markdown("**Rows to be deleted:**")
     for r in rows:
-        due = r.get("due_date") or "—"
         st.markdown(
-            f"- **{r.get('filing_type', '')}** — {r.get('quarter', r.get('period', ''))} — "
-            f"{r.get('assigned_to', '')} — due {due}"
+            f"- **{r.get('filing_type', '')}** — "
+            f"{r.get('quarter', r.get('period', ''))} — "
+            f"{r.get('assigned_to', '')} — due {r.get('due_date') or '—'}"
         )
     st.divider()
     confirm, cancel = st.columns(2)
     if confirm.button("Yes, delete", key="del_confirm", type="primary", use_container_width=True):
         from sa_rebuild.compliance.db import delete_filing
         failed = []
+        deleted_ids = {r["id"] for r in rows}
         for r in rows:
             try:
                 delete_filing(r["id"])
@@ -368,6 +380,10 @@ def _delete_modal(rows: list[dict], user_email: str) -> None:
             for msg in failed:
                 st.error(f"Delete failed — {msg}")
         else:
+            for cat in ("quarterly", "annual", "one_time"):
+                key = f"new_ids_{cat}"
+                if key in st.session_state:
+                    st.session_state[key] -= deleted_ids
             st.rerun()
     if cancel.button("Cancel", key="del_cancel", use_container_width=True):
         st.rerun()
@@ -376,14 +392,15 @@ def _delete_modal(rows: list[dict], user_email: str) -> None:
 @st.dialog("🕐 Change History")
 def _history_modal(row: dict) -> None:
     st.markdown(
-        f"**{row['filing_type']}** — {row.get('quarter', row.get('period', ''))} "
-        f"— {row.get('assigned_to', '')}"
+        f"**{row['filing_type']}** — "
+        f"{row.get('quarter', row.get('period', ''))} — "
+        f"{row.get('assigned_to', '')}"
     )
     st.divider()
     from sa_rebuild.compliance.db import get_filing_history
     history = get_filing_history(row["id"])
     if not history:
-        st.info("No history yet — changes are logged after the first status edit.")
+        st.info("No history yet — status changes are logged automatically.")
     else:
         for h in reversed(history):
             ts = h.get("changed_at")
@@ -410,6 +427,8 @@ def _do_import(raw: bytes, category: str, user_email: str) -> None:
 
     from sa_rebuild.compliance.db import add_filing
     added, errors = 0, []
+    new_ids: set = st.session_state.get(f"new_ids_{category}", set())
+
     for i, row in df.iterrows():
         try:
             year_val    = row.get("year")
@@ -417,7 +436,7 @@ def _do_import(raw: bytes, category: str, user_email: str) -> None:
             year_int    = int(year_val) if pd.notna(year_val) and year_val else None
             period_val  = (f"{quarter_val} {year_int}".strip()
                            if quarter_val else str(year_int or ""))
-            add_filing({
+            new_id = add_filing({
                 "category":            category,
                 "filing_type":         str(row.get("filing_type", "")).strip(),
                 "jurisdiction":        str(row.get("jurisdiction", "N/A")).strip(),
@@ -431,16 +450,66 @@ def _do_import(raw: bytes, category: str, user_email: str) -> None:
                 "assigned_to":         str(row.get("assigned_to", "LLC")).strip(),
                 "notes":               str(row.get("notes", "")).strip(),
             }, user_email)
+            new_ids.add(new_id)
             added += 1
         except Exception as exc:
             errors.append(f"Row {i + 1}: {exc}")
 
+    st.session_state[f"new_ids_{category}"] = new_ids
     if added:
-        st.success(f"Imported {added} filing(s).")
+        st.success(f"Imported {added} filing(s). New rows are marked 'New' in the first column.")
     for e in errors:
         st.error(e)
     if added:
         st.rerun()
+
+
+# ── filters ───────────────────────────────────────────────────────────────────
+
+def _fk(category: str, field: str) -> str:
+    return f"flt_{category}_{field}"
+
+
+def _render_filters(category: str, rows: list[dict]) -> list[dict]:
+    years     = sorted({r["year"] for r in rows if r.get("year")}, reverse=True)
+    assignees = sorted({r["assigned_to"] for r in rows if r.get("assigned_to")})
+
+    has_quarter = (category == "quarterly")
+    n_cols = 4 if has_quarter else 3
+    cols = st.columns(n_cols + 1)  # +1 for Clear button
+
+    sel_year = cols[0].selectbox(
+        "Year", ["All"] + [str(y) for y in years], key=_fk(category, "year"),
+    )
+    sel_who = cols[1].selectbox(
+        "Assigned To", ["All"] + assignees, key=_fk(category, "who"),
+    )
+    sel_status = cols[2].selectbox(
+        "Status", ["All"] + _STATUS_OPTIONS, key=_fk(category, "status"),
+    )
+
+    sel_quarter = None
+    if has_quarter:
+        quarters = sorted({r.get("quarter", "") for r in rows if r.get("quarter")})
+        sel_quarter = cols[3].selectbox(
+            "Quarter", ["All"] + quarters, key=_fk(category, "quarter"),
+        )
+
+    if cols[-1].button("✖ Clear", key=f"btn_clear_{category}", use_container_width=True):
+        for field in ("year", "who", "status", "quarter"):
+            k = _fk(category, field)
+            if k in st.session_state:
+                del st.session_state[k]
+        st.rerun()
+
+    return [
+        r for r in rows
+        if (sel_year == "All"    or str(r.get("year")) == sel_year)
+        and (sel_who == "All"    or r.get("assigned_to") == sel_who)
+        and (sel_status == "All" or r.get("status") == sel_status)
+        and (sel_quarter is None or sel_quarter == "All"
+             or r.get("quarter") == sel_quarter)
+    ]
 
 
 # ── tab renderer ──────────────────────────────────────────────────────────────
@@ -450,28 +519,18 @@ def _render_filing_tab(
     user_email: str,
     has_confirmation: bool = False,
 ) -> None:
-    rows = _load(category)
-
-    # Filters
-    years     = sorted({r["year"] for r in rows if r.get("year")}, reverse=True)
-    assignees = sorted({r["assigned_to"] for r in rows if r.get("assigned_to")})
-    f1, f2 = st.columns(2)
-    sel_year = f1.selectbox("Year", ["All"] + [str(y) for y in years], key=f"yr_{category}")
-    sel_who  = f2.selectbox("Assigned To", ["All"] + assignees, key=f"who_{category}")
-
-    filtered = [
-        r for r in rows
-        if (sel_year == "All" or str(r.get("year")) == sel_year)
-        and (sel_who == "All" or r.get("assigned_to") == sel_who)
-    ]
-
-    # Table
-    display_df = _display_df(filtered, category)
+    rows     = _load(category)
+    filtered = _render_filters(category, rows)
 
     if filtered:
-        st.caption(f"{len(filtered)} rows — click a row to select it, then use the buttons below.")
+        st.caption(
+            f"{len(filtered)} of {len(rows)} rows  "
+            "— click a column header to sort, select rows to edit or delete"
+        )
     else:
-        st.info("No filings yet. Click **➕ Add** below or import from CSV.")
+        st.info("No filings match the current filters. Click **✖ Clear** to reset.")
+
+    display_df = _display_df(filtered, category)
 
     event = st.dataframe(
         display_df,
@@ -479,7 +538,7 @@ def _render_filing_tab(
         hide_index=True,
         selection_mode="multi-row",
         on_select="rerun",
-        key=f"tbl_{category}_{sel_year}_{sel_who}",
+        key=f"tbl_{category}",
     )
 
     selected_indices = event.selection.rows if hasattr(event, "selection") else []
@@ -523,15 +582,15 @@ def _render_filing_tab(
         use_container_width=True,
     )
 
-    show_import_key = f"show_import_{category}"
-    st.session_state.setdefault(show_import_key, False)
+    show_key = f"show_import_{category}"
+    st.session_state.setdefault(show_key, False)
     if imp2.button("📤 Import from CSV", key=f"btn_imp_{category}", use_container_width=True):
-        st.session_state[show_import_key] = not st.session_state[show_import_key]
+        st.session_state[show_key] = not st.session_state[show_key]
 
-    if st.session_state[show_import_key]:
-        st.markdown("**Upload a filled CSV** (download the template above for the correct columns):")
+    if st.session_state[show_key]:
+        st.markdown("Upload a filled CSV (download the template above for correct columns):")
         uploaded = st.file_uploader(
-            "Choose CSV file", type=["csv"], key=f"upload_{category}",
+            "CSV file", type=["csv"], key=f"upload_{category}",
             label_visibility="collapsed",
         )
         if uploaded:
@@ -554,10 +613,10 @@ def _render_filing_tab(
                         type="primary",
                     ):
                         _do_import(raw, category, user_email)
-                        st.session_state[show_import_key] = False
+                        st.session_state[show_key] = False
 
 
-# ── dashboard ���────────────────────────────────────────────────────────────────
+# ── dashboard ─────────────────────────────────────────────────────────────────
 
 def _render_dashboard() -> None:
     q_rows  = _load("quarterly")
@@ -579,9 +638,9 @@ def _render_dashboard() -> None:
     c3.metric("One-Time",   f"{ot_done} / {ot_tot} done", delta=f"{ot_tot - ot_done} pending")
 
     st.divider()
-    today   = date.today()
-    overdue = [r for r in all_rows
-               if r.get("status") != "Done" and r.get("due_date") and r["due_date"] < today]
+    today    = date.today()
+    overdue  = [r for r in all_rows
+                if r.get("status") != "Done" and r.get("due_date") and r["due_date"] < today]
     upcoming = sorted(
         [r for r in all_rows
          if r.get("status") != "Done" and r.get("due_date") and r["due_date"] >= today],
@@ -590,26 +649,26 @@ def _render_dashboard() -> None:
 
     left, right = st.columns(2)
     with left:
-        st.subheader(f"⚠️ Overdue ({len(overdue)})")
+        st.subheader(f"Overdue ({len(overdue)})")
         if not overdue:
             st.success("Nothing overdue.")
         else:
             for r in sorted(overdue, key=lambda x: x.get("due_date") or date.max):
-                period = r.get("quarter", r.get("period", ""))
+                period = r.get("quarter") or r.get("period", "")
                 st.markdown(
                     f"**{r['filing_type']}** — {r.get('assigned_to','LLC')}  \n"
                     f"Due: `{r.get('due_date')}`  |  {period}",
                 )
 
     with right:
-        st.subheader("📅 Coming up next")
+        st.subheader("Coming up next")
         if not upcoming:
             st.info("No upcoming filings found.")
         else:
             for r in upcoming:
                 days_left = (r["due_date"] - today).days
                 label  = f"{days_left}d" if days_left > 0 else "today"
-                period = r.get("quarter", r.get("period", ""))
+                period = r.get("quarter") or r.get("period", "")
                 st.markdown(
                     f"**{r['filing_type']}** — {r.get('assigned_to','LLC')}  \n"
                     f"Due: `{r.get('due_date')}` ({label})  |  {period}",
