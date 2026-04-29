@@ -21,10 +21,19 @@ Powered by your Keepa Pro key. No login required.
 
 ### 📋 LLC Compliance Tracker
 
-A live replacement for the Excel compliance tracker. Tracks all quarterly,
-annual, and one-time filing requirements for Central Line Group LLC. Check
-off filings, log confirmation numbers, see what's due next, and review the
-full audit history of who changed what and when. Login required (Firebase).
+Live replacement for the Excel compliance tracker. Tracks all quarterly,
+annual, and one-time filing requirements for Central Line Group LLC.
+
+| Tab | What it does |
+|---|---|
+| Dashboard | Overdue + upcoming filings at a glance; filing quick-reference table |
+| Quarterly | NJ Sales Tax, Federal/NJ estimated tax — filter by year, quarter, assignee |
+| Annual | Form 1065, NJ-1065, personal 1040s — filter by year, assignee |
+| One-Time | Setup items (bank account, Amazon seller account, BOI report, etc.) |
+| Settings | Edit company name/formation date; manage members; sync assignees from filings |
+
+Key features: login required (Firebase Auth), full audit trail of every status
+change, CSV import/export, row reordering, confirmation number tracking.
 
 ---
 
@@ -69,27 +78,30 @@ rows are never lost.
 
 ## For non-developers — LLC Compliance Tracker
 
-1. Open the app and select **LLC Compliance** in the sidebar.
-2. Sign in with your email and password (set up by the admin).
-3. Use the **Dashboard** tab for an overview of what's done, overdue, and coming up.
-4. Use the **Quarterly / Annual / One-Time** tabs to check off filings:
-   - Edit the **Status** column (`Pending` → `Done` or `Overdue`)
-   - Fill in **Date Filed** and **Conf. #** when marking done
-   - Click **Save changes**
-5. Use **Add a filing row** to add new requirements.
-6. Use **View change history** to see who changed what and when.
+### Sign in
+
+1. Open the app → select **LLC Compliance** in the sidebar.
+2. Sign in with your email and password (accounts created by the admin in Firebase Console → Authentication).
+
+### Day-to-day use
+
+- **Dashboard** — see overdue filings in red and the next 5 upcoming deadlines at a glance.
+- **Quarterly / Annual / One-Time tabs** — select a row and click **Edit** to update status, date filed, confirmation number, or notes. Every status change is logged automatically.
+- **Filters** — narrow by status, year, quarter, or assignee. The default view hides Done rows; clear the Status filter to see everything.
+- **Add** — click **+ Add** to create a new filing row manually.
+- **History** — select a row and click **History** to see every status change with timestamp and who made it.
+- **Import** — download the CSV template for the tab, fill it in, and upload via **Import from CSV**.
+- **Reorder** — select a row and use **↑ Up / ↓ Down** to change display order within a tab.
+
+### Managing members and company info (Settings tab)
+
+- **Company Info** — edit the company name or formation date shown in the page header.
+- **Members** — the names that appear in every "Assigned To" dropdown. Add members manually, or click **Sync now** to automatically pull all unique assignee names from existing filings.
+- **Removing a member** — clicking Remove opens a dialog showing how many filings reference that person. You must reassign those filings (to an existing member or a new name) before the removal is confirmed. Filings are updated in the database immediately.
 
 ---
 
-## For developers — run locally
-
-### Requirements
-
-- Python 3.10 or later
-- A Keepa Pro API key (for FBA Calculator)
-- Firebase project credentials (for LLC Compliance — see `compliance_tool_plan.md`)
-
-### Setup
+## For developers — general setup
 
 ```bash
 git clone https://github.com/Emanoid/selleramp_rebuild.git
@@ -99,19 +111,7 @@ source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 ```
 
-Copy `.env` and fill in your keys:
-
-```
-KEEPA_API_KEY=your_keepa_key_here
-
-FIREBASE_PROJECT_ID=your-project-id-here
-FIREBASE_WEB_API_KEY=your-web-api-key-here
-FIREBASE_SERVICE_ACCOUNT=service_account.json
-```
-
-Drop `service_account.json` (downloaded from Firebase) into the repo root.
-
-### Run locally
+### Run the app
 
 ```bash
 streamlit run src/sa_rebuild/web/app.py
@@ -125,24 +125,50 @@ pytest -q
 
 42 offline tests — no API key required, all Keepa responses are mocked.
 
-### Seed the compliance database
+---
 
-Run once after setting up Firebase (see `compliance_tool_plan.md`):
+## For developers — FBA Calculator
 
-```bash
-python scripts/seed_compliance.py path/to/CentralLineGroup_Compliance_Tracker.xlsx
+### Environment
+
+Add to `.env`:
+
+```
+KEEPA_API_KEY=your_keepa_key_here
 ```
 
-Re-runnable safely — existing rows are updated in place, new rows are added.
-Preview without writing: add `--dry-run`.
+`SA_REBUILD_HOME` optionally overrides the data folder (cache, state, output). Default: `~/.sa-rebuild/`.
 
 ### Deploy to Streamlit Community Cloud
 
 1. Push `main` to GitHub.
 2. Go to [share.streamlit.io](https://share.streamlit.io) → **New app**.
 3. Repo: `Emanoid/selleramp_rebuild`, branch: `main`, file: `src/sa_rebuild/web/app.py`.
-4. Under **Settings → Secrets**, add all `.env` values plus `FIREBASE_SERVICE_ACCOUNT_JSON`
-   (paste the full contents of `service_account.json`).
+4. Under **Settings → Secrets**, add `KEEPA_API_KEY`.
+5. Click **Deploy**.
+
+---
+
+## For developers — LLC Compliance Tracker
+
+### Environment
+
+Add to `.env`:
+
+```
+FIREBASE_PROJECT_ID=your-project-id-here
+FIREBASE_WEB_API_KEY=your-web-api-key-here
+FIREBASE_SERVICE_ACCOUNT=service_account.json
+```
+
+Drop `service_account.json` (downloaded from Firebase Console → Service Accounts) into the repo root. See `compliance_tool_plan.md` for the full Firebase project setup guide.
+
+### Deploy to Streamlit Community Cloud
+
+1. Push `main` to GitHub.
+2. Go to [share.streamlit.io](https://share.streamlit.io) → **New app**.
+3. Repo: `Emanoid/selleramp_rebuild`, branch: `main`, file: `src/sa_rebuild/web/app.py`.
+4. Under **Settings → Secrets**, add `FIREBASE_PROJECT_ID`, `FIREBASE_WEB_API_KEY`, and `FIREBASE_SERVICE_ACCOUNT_JSON` (paste the full contents of `service_account.json`).
 5. Click **Deploy**.
 
 ### Project layout
@@ -151,14 +177,17 @@ Preview without writing: add `--dry-run`.
 src/sa_rebuild/
 ├── web/
 │   ├── app.py                  # Entry point — navigation wirer
-│   ├── home.py                 # Landing page
+│   ├── home.py                 # Landing page (two-column tool cards)
 │   └── pages/
 │       ├── 1_FBA_Calculator.py # FBA sourcing tool
 │       └── 2_LLC_Compliance.py # Compliance tracker (Firebase-backed)
 ├── compliance/
 │   ├── firebase_client.py      # Cached Firestore client
 │   ├── auth.py                 # Firebase Auth REST API sign-in
-│   └── db.py                   # Firestore CRUD + audit history
+│   └── db.py                   # Firestore CRUD — filings, members, company config
+│                               #   get/add/update/delete filings + audit history
+│                               #   get/add/delete members, count & reassign by assignee
+│                               #   get/save company info, sync members from filings
 ├── config.py                   # AppConfig (Pydantic)
 ├── runner.py                   # Per-row Keepa processing + token waits
 ├── keepa_client.py             # Token-aware Keepa wrapper + 24h cache
@@ -174,23 +203,32 @@ src/sa_rebuild/
     ├── variations.py           # Sibling viability
     └── viability.py            # Buy / Caution / Skip label
 scripts/
-└── seed_compliance.py          # Excel → Firestore import
+└── seed_compliance.py          # Excel → Firestore (filings + members)
 tests/
 config.yaml                     # Tunable FBA thresholds
 compliance_tool_plan.md         # Firebase setup guide
 deployment.md                   # Streamlit Cloud + Namecheap DNS guide
 ```
 
+**Never commit:** `service_account.json`, `streamlit_secrets.toml`, `.streamlit/secrets.toml` — all in `.gitignore`.
+
 ### Environment variables
 
-| Variable | Tool | What it does |
-|---|---|---|
-| `KEEPA_API_KEY` | FBA Calculator | Pre-fills the API key in the sidebar |
-| `SA_REBUILD_HOME` | FBA Calculator | Override data folder (cache, state, output). Default: `~/.sa-rebuild/` |
-| `FIREBASE_PROJECT_ID` | LLC Compliance | Firebase project identifier |
-| `FIREBASE_WEB_API_KEY` | LLC Compliance | Firebase Web API key (for user sign-in) |
-| `FIREBASE_SERVICE_ACCOUNT` | LLC Compliance | Path to service account JSON (local) |
-| `FIREBASE_SERVICE_ACCOUNT_JSON` | LLC Compliance | Full JSON content (Streamlit Cloud secrets) |
+**FBA Calculator**
+
+| Variable | What it does |
+|---|---|
+| `KEEPA_API_KEY` | Pre-fills the API key in the sidebar |
+| `SA_REBUILD_HOME` | Override data folder (cache, state, output). Default: `~/.sa-rebuild/` |
+
+**LLC Compliance Tracker**
+
+| Variable | What it does |
+|---|---|
+| `FIREBASE_PROJECT_ID` | Firebase project identifier |
+| `FIREBASE_WEB_API_KEY` | Firebase Web API key (for user sign-in) |
+| `FIREBASE_SERVICE_ACCOUNT` | Path to service account JSON — local dev only |
+| `FIREBASE_SERVICE_ACCOUNT_JSON` | Full JSON content — Streamlit Cloud secrets |
 
 ---
 
