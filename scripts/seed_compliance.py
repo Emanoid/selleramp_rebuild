@@ -221,6 +221,11 @@ def main() -> None:
         action="store_true",
         help="Print what would be written without touching Firestore",
     )
+    parser.add_argument(
+        "--wipe",
+        action="store_true",
+        help="Delete ALL documents in the filings collection before seeding (fixes corruption)",
+    )
     args = parser.parse_args()
 
     xlsx_path = Path(args.xlsx)
@@ -267,6 +272,19 @@ def main() -> None:
         cred = credentials.Certificate(str(sa_path))
         firebase_admin.initialize_app(cred)
     db = firestore.client()
+
+    if args.wipe:
+        print("Wiping filings collection…")
+        col = db.collection("filings")
+        deleted = 0
+        while True:
+            docs = list(col.limit(400).stream())
+            if not docs:
+                break
+            for doc in docs:
+                doc.reference.delete()
+                deleted += 1
+        print(f"Deleted {deleted} documents.")
 
     print("\nWriting to Firestore…")
     added, updated = upsert_all(db, all_records)

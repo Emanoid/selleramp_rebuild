@@ -11,11 +11,11 @@ import pandas as pd
 import streamlit as st
 
 _HERE = Path(__file__).resolve()
-_SRC = _HERE.parents[3]  # pages/ → web/ → sa_rebuild/ → src/
+_SRC = _HERE.parents[3]  # pages/ -> web/ -> sa_rebuild/ -> src/
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-# ── static reference data ─────────────────────────────────────────────────────
+# ── static reference data ────────────────────────────────────���────────────────
 
 _COMPANY = {
     "name": "Central Line Group LLC",
@@ -48,18 +48,18 @@ _STATUS_OPTIONS   = ["Pending", "Done", "Overdue"]
 _STATUS_ICON      = {"Pending": "⏳", "Done": "✅", "Overdue": "⚠️"}
 _ASSIGNED_OPTIONS = ["LLC", "Kadiatu", "Emmanuel"]
 
-# ── template CSVs ─────────────────────────────────────────────────────────────
+# ── CSV templates (columns match each sheet in the spreadsheet) ───────────────
 
 _TEMPLATES: dict[str, str] = {
     "quarterly": (
-        "filing_type,jurisdiction,year,quarter,period,due_date,assigned_to,notes\n"
-        "NJ Sales Tax Return,New Jersey,2026,Q2 (May-Jun),Q2 2026,2026-07-31,LLC,First return\n"
-        "Federal Est. Tax 1040-ES,Federal,2026,Q2 (Apr-Jun),Q2 2026,2026-06-16,Kadiatu,Pay at irs.gov/payments\n"
+        "filing_type,jurisdiction,year,quarter,due_date,assigned_to,notes\n"
+        "NJ Sales Tax Return,New Jersey,2026,Q2 (May-Jun),2026-07-31,LLC,First return\n"
+        "Federal Est. Tax 1040-ES,Federal,2026,Q2 (Apr-Jun),2026-06-16,Kadiatu,Pay at irs.gov/payments\n"
     ),
     "annual": (
-        "filing_type,jurisdiction,year,period,due_date,assigned_to,notes\n"
-        "Federal Form 1065,Federal,2026,2026,2027-03-15,LLC,Partnership return + K-1s\n"
-        "Personal Form 1040,Federal,2026,2026,2027-04-15,Kadiatu,Attach K-1 from Form 1065\n"
+        "filing_type,jurisdiction,year,due_date,assigned_to,notes\n"
+        "Federal Form 1065,Federal,2026,2027-03-15,LLC,Partnership return + K-1s\n"
+        "Personal Form 1040,Federal,2026,2027-04-15,Kadiatu,Attach K-1 from Form 1065\n"
     ),
     "one_time": (
         "filing_type,jurisdiction,due_date,assigned_to,notes,confirmation_number\n"
@@ -130,61 +130,108 @@ def _parse_date_str(val) -> Optional[date]:
     return None
 
 
-def _display_df(rows: list[dict], has_confirmation: bool) -> pd.DataFrame:
-    """Build a human-readable, read-only DataFrame for display."""
-    if not rows:
-        cols = ["Filing", "Jurisdiction", "Period", "Due Date", "Status",
-                "Assigned To", "Date Filed", "Notes"]
-        if has_confirmation:
-            cols.append("Conf. #")
-        return pd.DataFrame(columns=cols)
+def _icon(status: str) -> str:
+    return f"{_STATUS_ICON.get(status, '•')} {status}"
 
-    records = []
-    for r in rows:
-        status = r.get("status", "Pending")
-        rec = {
-            "Filing":      r.get("filing_type", ""),
-            "Jurisdiction":r.get("jurisdiction", ""),
-            "Period":      r.get("period", ""),
-            "Due Date":    r.get("due_date"),
-            "Status":      f"{_STATUS_ICON.get(status, '•')} {status}",
-            "Assigned To": r.get("assigned_to", ""),
-            "Date Filed":  r.get("date_filed"),
-            "Notes":       r.get("notes", ""),
-        }
-        if has_confirmation:
-            rec["Conf. #"] = r.get("confirmation_number", "") or ""
-        records.append(rec)
-    return pd.DataFrame(records)
+
+def _display_df(rows: list[dict], category: str) -> pd.DataFrame:
+    """Read-only DataFrame with columns matching the spreadsheet layout."""
+    if category == "quarterly":
+        cols = ["#", "Year", "Filing Type", "Jurisdiction", "Quarter",
+                "Due Date", "Assigned To", "Status", "Date Filed", "Notes"]
+        if not rows:
+            return pd.DataFrame(columns=cols)
+        return pd.DataFrame([
+            {
+                "#":            i,
+                "Year":         r.get("year", ""),
+                "Filing Type":  r.get("filing_type", ""),
+                "Jurisdiction": r.get("jurisdiction", ""),
+                "Quarter":      r.get("quarter", "") or r.get("period", ""),
+                "Due Date":     r.get("due_date"),
+                "Assigned To":  r.get("assigned_to", ""),
+                "Status":       _icon(r.get("status", "Pending")),
+                "Date Filed":   r.get("date_filed"),
+                "Notes":        r.get("notes", ""),
+            }
+            for i, r in enumerate(rows, 1)
+        ])
+
+    elif category == "annual":
+        cols = ["#", "Year", "Filing", "Jurisdiction",
+                "Due Date", "Assigned To", "Status", "Date Filed", "Notes"]
+        if not rows:
+            return pd.DataFrame(columns=cols)
+        return pd.DataFrame([
+            {
+                "#":            i,
+                "Year":         r.get("year", ""),
+                "Filing":       r.get("filing_type", ""),
+                "Jurisdiction": r.get("jurisdiction", ""),
+                "Due Date":     r.get("due_date"),
+                "Assigned To":  r.get("assigned_to", ""),
+                "Status":       _icon(r.get("status", "Pending")),
+                "Date Filed":   r.get("date_filed"),
+                "Notes":        r.get("notes", ""),
+            }
+            for i, r in enumerate(rows, 1)
+        ])
+
+    else:  # one_time — matches OneTime sheet: Item | Jurisdiction | Due/Target | Status | Date Completed | Conf# | Notes
+        cols = ["#", "Item", "Jurisdiction", "Due / Target",
+                "Status", "Date Completed", "Confirmation #", "Notes"]
+        if not rows:
+            return pd.DataFrame(columns=cols)
+        return pd.DataFrame([
+            {
+                "#":              i,
+                "Item":           r.get("filing_type", ""),
+                "Jurisdiction":   r.get("jurisdiction", ""),
+                "Due / Target":   r.get("due_date"),
+                "Status":         _icon(r.get("status", "Pending")),
+                "Date Completed": r.get("date_filed"),
+                "Confirmation #": r.get("confirmation_number", "") or "",
+                "Notes":          r.get("notes", ""),
+            }
+            for i, r in enumerate(rows, 1)
+        ])
 
 
 # ── dialogs ───────────────────────────────────────────────────────────────────
 
 @st.dialog("✏️ Edit Filing", width="large")
 def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: str) -> None:
-    st.markdown(f"**{row['filing_type']}** — {row.get('period', '')} — {row.get('jurisdiction', '')}")
+    filing_label     = "Item"           if category == "one_time" else "Filing Type"
+    date_filed_label = "Date Completed" if category == "one_time" else "Date Filed"
+    due_label        = "Due / Target"   if category == "one_time" else "Due Date"
+
+    st.markdown(f"**{row['filing_type']}** — {row.get('jurisdiction', '')}")
     st.divider()
 
-    # ── most-commonly-updated fields first ────────────────────────────────────
+    # Status + filed date at the top — most commonly updated
     c1, c2 = st.columns(2)
     cur_status = row.get("status", "Pending")
     new_status = c1.selectbox(
         "Status *", _STATUS_OPTIONS,
         index=_STATUS_OPTIONS.index(cur_status) if cur_status in _STATUS_OPTIONS else 0,
     )
-    new_date_filed = c2.date_input("Date Filed", value=row.get("date_filed") or None)
+    cur_filed = row.get("date_filed")
+    new_date_filed = c2.date_input(
+        date_filed_label,
+        value=cur_filed if isinstance(cur_filed, date) else None,
+    )
 
     if has_confirmation:
         new_conf = st.text_input("Confirmation #", value=row.get("confirmation_number") or "")
 
     new_notes = st.text_area("Notes", value=row.get("notes") or "", height=80)
 
-    # ── structural fields ─────────────────────────────────────────────────────
+    # Structural details below the divider
     st.divider()
     st.caption("Structural details — update only if the filing itself changes")
 
     c3, c4 = st.columns(2)
-    new_type = c3.text_input("Filing Type", value=row.get("filing_type", ""))
+    new_type = c3.text_input(filing_label, value=row.get("filing_type", ""))
     _JURISDICTIONS = ["Federal", "New Jersey", "N/A"]
     cur_jur = row.get("jurisdiction", "N/A")
     new_jur = c4.selectbox(
@@ -193,29 +240,30 @@ def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: st
     )
 
     c5, c6 = st.columns(2)
-    new_period = c5.text_input("Period", value=row.get("period", ""))
-    new_year = c6.number_input(
-        "Year", min_value=2024, max_value=2035,
-        value=int(row.get("year") or date.today().year), step=1,
-    )
-
-    c7, c8 = st.columns(2)
     cur_due = row.get("due_date")
-    new_due = c7.date_input(
-        "Due Date", value=cur_due if isinstance(cur_due, date) else None,
+    new_due = c5.date_input(
+        due_label,
+        value=cur_due if isinstance(cur_due, date) else None,
     )
     cur_who = row.get("assigned_to", "LLC")
-    new_who = c8.selectbox(
+    new_who = c6.selectbox(
         "Assigned To", _ASSIGNED_OPTIONS,
         index=_ASSIGNED_OPTIONS.index(cur_who) if cur_who in _ASSIGNED_OPTIONS else 0,
     )
 
+    new_year = None
     new_quarter = None
-    if category == "quarterly":
-        new_quarter = st.text_input(
-            "Quarter", value=row.get("quarter", ""),
-            placeholder="e.g. Q2 (Apr-Jun)",
+    if category != "one_time":
+        c7, c8 = st.columns(2)
+        new_year = c7.number_input(
+            "Year", min_value=2024, max_value=2035,
+            value=int(row.get("year") or date.today().year), step=1,
         )
+        if category == "quarterly":
+            new_quarter = c8.text_input(
+                "Quarter", value=row.get("quarter", ""),
+                placeholder="e.g. Q2 (Apr-Jun)",
+            )
 
     st.divider()
     save, cancel = st.columns(2)
@@ -227,13 +275,14 @@ def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: st
             "notes":        new_notes,
             "filing_type":  new_type.strip(),
             "jurisdiction": new_jur,
-            "period":       new_period.strip(),
-            "year":         int(new_year),
             "due_date":     new_due,
             "assigned_to":  new_who,
         }
-        if category == "quarterly":
+        if new_year is not None:
+            updates["year"] = int(new_year)
+        if category == "quarterly" and new_quarter is not None:
             updates["quarter"] = new_quarter.strip() or None
+            updates["period"]  = f"{new_quarter.strip()} {int(new_year)}".strip()
         if has_confirmation:
             updates["confirmation_number"] = new_conf.strip() or None
         update_filing(row["id"], updates, user_email)
@@ -244,33 +293,47 @@ def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: st
 
 @st.dialog("➕ Add Filing", width="large")
 def _add_modal(category: str, user_email: str, has_confirmation: bool) -> None:
+    filing_label = "Item" if category == "one_time" else "Filing Type"
+    due_label    = "Due / Target" if category == "one_time" else "Due Date"
+
     with st.form("add_form", clear_on_submit=True):
         c1, c2 = st.columns(2)
-        new_type = c1.text_input("Filing type *")
+        new_type = c1.text_input(f"{filing_label} *")
         new_jur  = c2.selectbox("Jurisdiction", ["Federal", "New Jersey", "N/A"])
-        c3, c4   = st.columns(2)
-        new_year = c3.number_input("Year", min_value=2024, max_value=2035,
-                                   value=date.today().year, step=1)
-        new_due  = c4.date_input("Due date", value=None)
-        c5, c6   = st.columns(2)
-        new_who  = c5.selectbox("Assigned to", _ASSIGNED_OPTIONS)
-        new_per  = c6.text_input("Period label", placeholder="e.g. Q2 2026 or 2026")
+
+        c3, c4 = st.columns(2)
+        new_due = c3.date_input(due_label, value=None)
+        new_who = c4.selectbox("Assigned To", _ASSIGNED_OPTIONS)
+
+        if category != "one_time":
+            c5, c6 = st.columns(2)
+            new_year = c5.number_input("Year", min_value=2024, max_value=2035,
+                                       value=date.today().year, step=1)
+            if category == "quarterly":
+                new_quarter = c6.text_input("Quarter", placeholder="e.g. Q2 (Apr-Jun)")
+            else:
+                new_quarter = None
+
         new_notes = st.text_area("Notes", height=80)
         new_conf  = st.text_input("Confirmation #") if has_confirmation else None
-        submitted = st.form_submit_button("Add filing", type="primary")
+        submitted = st.form_submit_button("Add", type="primary")
 
     if submitted:
         if not new_type.strip():
-            st.error("Filing type is required.")
+            st.error(f"{filing_label} is required.")
         else:
             from sa_rebuild.compliance.db import add_filing
+            year_val    = int(new_year) if category != "one_time" else None
+            quarter_val = new_quarter.strip() if (category == "quarterly" and new_quarter) else None
+            period_val  = (f"{quarter_val} {year_val}".strip()
+                           if quarter_val else str(year_val or ""))
             add_filing({
                 "category":            category,
                 "filing_type":         new_type.strip(),
                 "jurisdiction":        new_jur,
-                "year":                int(new_year),
-                "period":              new_per.strip() or str(int(new_year)),
-                "quarter":             None,
+                "year":                year_val,
+                "period":              period_val,
+                "quarter":             quarter_val,
                 "due_date":            new_due,
                 "status":              "Pending",
                 "date_filed":          None,
@@ -288,8 +351,8 @@ def _delete_modal(rows: list[dict], user_email: str) -> None:
     for r in rows:
         due = r.get("due_date") or "—"
         st.markdown(
-            f"- **{r.get('filing_type','')}** — {r.get('period','')} — "
-            f"{r.get('assigned_to','')} — due {due}"
+            f"- **{r.get('filing_type', '')}** — {r.get('quarter', r.get('period', ''))} — "
+            f"{r.get('assigned_to', '')} — due {due}"
         )
     st.divider()
     confirm, cancel = st.columns(2)
@@ -313,7 +376,8 @@ def _delete_modal(rows: list[dict], user_email: str) -> None:
 @st.dialog("🕐 Change History")
 def _history_modal(row: dict) -> None:
     st.markdown(
-        f"**{row['filing_type']}** — {row.get('period', '')} — {row.get('assigned_to', '')}"
+        f"**{row['filing_type']}** — {row.get('quarter', row.get('period', ''))} "
+        f"— {row.get('assigned_to', '')}"
     )
     st.divider()
     from sa_rebuild.compliance.db import get_filing_history
@@ -333,14 +397,9 @@ def _history_modal(row: dict) -> None:
 
 # ── import ────────────────────────────────────────────────────────────────────
 
-def _process_import(
-    uploaded_file,
-    category: str,
-    user_email: str,
-    has_confirmation: bool,
-) -> None:
+def _do_import(raw: bytes, category: str, user_email: str) -> None:
     try:
-        df = pd.read_csv(io.BytesIO(uploaded_file.read()))
+        df = pd.read_csv(io.BytesIO(raw))
     except Exception as exc:
         st.error(f"Could not parse CSV: {exc}")
         return
@@ -353,14 +412,18 @@ def _process_import(
     added, errors = 0, []
     for i, row in df.iterrows():
         try:
-            year_val = row.get("year")
+            year_val    = row.get("year")
+            quarter_val = str(row.get("quarter", "")).strip() or None
+            year_int    = int(year_val) if pd.notna(year_val) and year_val else None
+            period_val  = (f"{quarter_val} {year_int}".strip()
+                           if quarter_val else str(year_int or ""))
             add_filing({
                 "category":            category,
                 "filing_type":         str(row.get("filing_type", "")).strip(),
                 "jurisdiction":        str(row.get("jurisdiction", "N/A")).strip(),
-                "year":                int(year_val) if pd.notna(year_val) else None,
-                "period":              str(row.get("period", "")).strip(),
-                "quarter":             str(row.get("quarter", "")).strip() or None,
+                "year":                year_int,
+                "period":              period_val,
+                "quarter":             quarter_val,
                 "due_date":            _parse_date_str(row.get("due_date")),
                 "status":              "Pending",
                 "date_filed":          None,
@@ -373,7 +436,7 @@ def _process_import(
             errors.append(f"Row {i + 1}: {exc}")
 
     if added:
-        st.success(f"Imported {added} filing(s) successfully.")
+        st.success(f"Imported {added} filing(s).")
     for e in errors:
         st.error(e)
     if added:
@@ -389,12 +452,12 @@ def _render_filing_tab(
 ) -> None:
     rows = _load(category)
 
-    # ── filters ──────────────────────────────────────────────────────────────
+    # Filters
     years     = sorted({r["year"] for r in rows if r.get("year")}, reverse=True)
     assignees = sorted({r["assigned_to"] for r in rows if r.get("assigned_to")})
     f1, f2 = st.columns(2)
     sel_year = f1.selectbox("Year", ["All"] + [str(y) for y in years], key=f"yr_{category}")
-    sel_who  = f2.selectbox("Assigned to", ["All"] + assignees, key=f"who_{category}")
+    sel_who  = f2.selectbox("Assigned To", ["All"] + assignees, key=f"who_{category}")
 
     filtered = [
         r for r in rows
@@ -402,15 +465,13 @@ def _render_filing_tab(
         and (sel_who == "All" or r.get("assigned_to") == sel_who)
     ]
 
-    # ── table (read-only, row-selectable) ────────────────────────────────────
-    display_df = _display_df(filtered, has_confirmation)
+    # Table
+    display_df = _display_df(filtered, category)
 
     if filtered:
-        st.caption(
-            f"{len(filtered)} rows — click a row to select it, then use the action buttons below."
-        )
+        st.caption(f"{len(filtered)} rows — click a row to select it, then use the buttons below.")
     else:
-        st.info("No filings yet — click **➕ Add Filing** to add one, or import from CSV.")
+        st.info("No filings yet. Click **➕ Add** below or import from CSV.")
 
     event = st.dataframe(
         display_df,
@@ -425,42 +486,31 @@ def _render_filing_tab(
     selected_rows    = [filtered[i] for i in selected_indices if i < len(filtered)]
     n_sel            = len(selected_rows)
 
-    # ── action bar ───────────────────────────────────────────────────────────
+    # Action bar
     st.divider()
     b1, b2, b3, b4, _b5 = st.columns(5)
 
-    if b1.button(
-        "✏️ Edit",
-        key=f"btn_edit_{category}",
-        disabled=n_sel != 1,
-        use_container_width=True,
-        help="Select exactly one row to edit",
-    ):
+    if b1.button("✏️ Edit", key=f"btn_edit_{category}",
+                 disabled=n_sel != 1, use_container_width=True,
+                 help="Select exactly one row to edit"):
         _edit_modal(selected_rows[0], user_email, has_confirmation, category)
 
-    if b2.button(
-        f"🗑️ Delete{f' ({n_sel})' if n_sel else ''}",
-        key=f"btn_del_{category}",
-        disabled=n_sel == 0,
-        use_container_width=True,
-        help="Select one or more rows to delete",
-    ):
+    if b2.button(f"🗑️ Delete{f' ({n_sel})' if n_sel else ''}",
+                 key=f"btn_del_{category}",
+                 disabled=n_sel == 0, use_container_width=True,
+                 help="Select one or more rows to delete"):
         _delete_modal(selected_rows, user_email)
 
-    if b3.button("➕ Add Filing", key=f"btn_add_{category}", use_container_width=True):
+    if b3.button("➕ Add", key=f"btn_add_{category}", use_container_width=True):
         _add_modal(category, user_email, has_confirmation)
 
-    if b4.button(
-        "🕐 History",
-        key=f"btn_hist_{category}",
-        use_container_width=True,
-        disabled=n_sel != 1,
-        help="Select one row to view its history",
-    ):
+    if b4.button("🕐 History", key=f"btn_hist_{category}",
+                 disabled=n_sel != 1, use_container_width=True,
+                 help="Select one row to view change history"):
         if n_sel == 1:
             _history_modal(selected_rows[0])
 
-    # ── import / export ──────────────────────────────────────────────────────
+    # Import / export
     st.divider()
     imp1, imp2 = st.columns(2)
 
@@ -471,7 +521,6 @@ def _render_filing_tab(
         file_name=f"{category}_template.csv",
         mime="text/csv",
         use_container_width=True,
-        help="Download a blank template to fill in and re-upload",
     )
 
     show_import_key = f"show_import_{category}"
@@ -480,16 +529,35 @@ def _render_filing_tab(
         st.session_state[show_import_key] = not st.session_state[show_import_key]
 
     if st.session_state[show_import_key]:
-        st.markdown("**Upload a filled CSV** (use the template above for the correct column format):")
+        st.markdown("**Upload a filled CSV** (download the template above for the correct columns):")
         uploaded = st.file_uploader(
             "Choose CSV file", type=["csv"], key=f"upload_{category}",
             label_visibility="collapsed",
         )
         if uploaded:
-            _process_import(uploaded, category, user_email, has_confirmation)
+            raw = uploaded.getvalue()
+            try:
+                preview_df = pd.read_csv(io.BytesIO(raw))
+            except Exception as exc:
+                st.error(f"Could not parse CSV: {exc}")
+                preview_df = None
+
+            if preview_df is not None:
+                if "filing_type" not in preview_df.columns:
+                    st.error("CSV must have a `filing_type` column.")
+                else:
+                    st.markdown(f"**Preview — {len(preview_df)} row(s):**")
+                    st.dataframe(preview_df, hide_index=True, use_container_width=True)
+                    if st.button(
+                        f"✅ Import {len(preview_df)} row(s)",
+                        key=f"btn_confirm_import_{category}",
+                        type="primary",
+                    ):
+                        _do_import(raw, category, user_email)
+                        st.session_state[show_import_key] = False
 
 
-# ── dashboard ─────────────────────────────────────────────────────────────────
+# ── dashboard ���────────────────────────────────────────────────────────────────
 
 def _render_dashboard() -> None:
     q_rows  = _load("quarterly")
@@ -506,9 +574,9 @@ def _render_dashboard() -> None:
     ot_done, ot_tot = _counts(ot_rows)
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Quarterly",  f"{q_done} / {q_tot} done",  delta=f"{q_tot  - q_done} pending")
-    c2.metric("Annual",     f"{a_done} / {a_tot} done",  delta=f"{a_tot  - a_done} pending")
-    c3.metric("One-Time",   f"{ot_done} / {ot_tot} done",delta=f"{ot_tot - ot_done} pending")
+    c1.metric("Quarterly",  f"{q_done} / {q_tot} done",   delta=f"{q_tot  - q_done} pending")
+    c2.metric("Annual",     f"{a_done} / {a_tot} done",   delta=f"{a_tot  - a_done} pending")
+    c3.metric("One-Time",   f"{ot_done} / {ot_tot} done", delta=f"{ot_tot - ot_done} pending")
 
     st.divider()
     today   = date.today()
@@ -527,9 +595,10 @@ def _render_dashboard() -> None:
             st.success("Nothing overdue.")
         else:
             for r in sorted(overdue, key=lambda x: x.get("due_date") or date.max):
+                period = r.get("quarter", r.get("period", ""))
                 st.markdown(
                     f"**{r['filing_type']}** — {r.get('assigned_to','LLC')}  \n"
-                    f"Due: `{r.get('due_date')}` &nbsp;|&nbsp; {r.get('period','')}",
+                    f"Due: `{r.get('due_date')}`  |  {period}",
                 )
 
     with right:
@@ -539,10 +608,11 @@ def _render_dashboard() -> None:
         else:
             for r in upcoming:
                 days_left = (r["due_date"] - today).days
-                label = f"{days_left}d" if days_left > 0 else "today"
+                label  = f"{days_left}d" if days_left > 0 else "today"
+                period = r.get("quarter", r.get("period", ""))
                 st.markdown(
                     f"**{r['filing_type']}** — {r.get('assigned_to','LLC')}  \n"
-                    f"Due: `{r.get('due_date')}` ({label})  |  {r.get('period','')}",
+                    f"Due: `{r.get('due_date')}` ({label})  |  {period}",
                 )
 
     st.divider()
