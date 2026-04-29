@@ -15,13 +15,31 @@ _SRC = _HERE.parents[3]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+# Import all db functions at module level so stale-package errors surface on
+# startup rather than lazily when a tab is first clicked.
+from sa_rebuild.compliance.db import (  # noqa: E402
+    get_filings,
+    get_filing_history,
+    ensure_order,
+    move_rows,
+    update_filing,
+    add_filing,
+    delete_filing,
+    get_members,
+    get_members_with_ids,
+    add_member,
+    delete_member,
+    get_company_info,
+    save_company_info,
+    sync_members_from_filings,
+    count_filings_by_assignee,
+    reassign_filings,
+)
+
 # ── static data ───────────────────────────────────────────────────────────────
 
 _COMPANY = {
-    "name":   "Central Line Group LLC",
-    "ein":    "42-2162254",
-    "nj_id":  "0451453963",
-    "formed": "April 27, 2026",
+    "name": "Central Line Group LLC",
 }
 
 _QUICK_REF = [
@@ -44,20 +62,19 @@ _KEY_SITES = [
     ("FinCEN BOI Filing",  "boiefiling.fincen.gov",          "Beneficial ownership report"),
 ]
 
-_STATUS_OPTIONS   = ["Pending", "Done", "Overdue"]
-_STATUS_ICON      = {"Pending": "⏳", "Done": "✅", "Overdue": "⚠️"}
-_ASSIGNED_OPTIONS = ["LLC", "Kadiatu", "Emmanuel"]
+_STATUS_OPTIONS = ["Pending", "Done", "Overdue"]
+_STATUS_ICON    = {"Pending": "⏳", "Done": "✅", "Overdue": "⚠️"}
 
 _TEMPLATES: dict[str, str] = {
     "quarterly": (
         "filing_type,jurisdiction,year,quarter,due_date,assigned_to,notes\n"
         "NJ Sales Tax Return,New Jersey,2026,Q2 (May-Jun),2026-07-31,LLC,First return\n"
-        "Federal Est. Tax 1040-ES,Federal,2026,Q2 (Apr-Jun),2026-06-16,Kadiatu,Pay at irs.gov/payments\n"
+        "Federal Est. Tax 1040-ES,Federal,2026,Q2 (Apr-Jun),2026-06-16,LLC,Pay at irs.gov/payments\n"
     ),
     "annual": (
         "filing_type,jurisdiction,year,due_date,assigned_to,notes\n"
         "Federal Form 1065,Federal,2026,2027-03-15,LLC,Partnership return + K-1s\n"
-        "Personal Form 1040,Federal,2026,2027-04-15,Kadiatu,Attach K-1 from Form 1065\n"
+        "Personal Form 1040,Federal,2026,2027-04-15,LLC,Attach K-1 from Form 1065\n"
     ),
     "one_time": (
         "filing_type,jurisdiction,due_date,assigned_to,notes,confirmation_number\n"
@@ -109,7 +126,6 @@ def _login_wall() -> Optional[dict]:
 
 
 def _load(category: str) -> list[dict]:
-    from sa_rebuild.compliance.db import get_filings
     return get_filings(category)
 
 
@@ -209,7 +225,7 @@ def _display_df(rows: list[dict], category: str) -> pd.DataFrame:
 
 # ── dialogs ───────────────────────────────────────────────────────────────────
 
-@st.dialog("✏️ Edit Filing", width="large")
+@st.dialog("✏️ Edit Filing")
 def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: str) -> None:
     filing_label     = "Item"           if category == "one_time" else "Filing Type"
     date_filed_label = "Date Completed" if category == "one_time" else "Date Filed"
@@ -253,10 +269,11 @@ def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: st
         due_label,
         value=cur_due if isinstance(cur_due, date) else None,
     )
+    assigned_opts = get_members()
     cur_who = row.get("assigned_to", "LLC")
     new_who = c6.selectbox(
-        "Assigned To", _ASSIGNED_OPTIONS,
-        index=_ASSIGNED_OPTIONS.index(cur_who) if cur_who in _ASSIGNED_OPTIONS else 0,
+        "Assigned To", assigned_opts,
+        index=assigned_opts.index(cur_who) if cur_who in assigned_opts else 0,
     )
 
     new_year = None
@@ -276,7 +293,6 @@ def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: st
     st.divider()
     save, cancel = st.columns(2)
     if save.button("💾 Save", type="primary", use_container_width=True, key="edit_save"):
-        from sa_rebuild.compliance.db import update_filing
         updates: dict = {
             "status":       new_status,
             "date_filed":   new_date_filed,
@@ -299,7 +315,7 @@ def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: st
         st.rerun()
 
 
-@st.dialog("➕ Add Filing", width="large")
+@st.dialog("➕ Add Filing")
 def _add_modal(category: str, user_email: str, has_confirmation: bool) -> None:
     filing_label = "Item" if category == "one_time" else "Filing Type"
     due_label    = "Due / Target" if category == "one_time" else "Due Date"
@@ -311,7 +327,7 @@ def _add_modal(category: str, user_email: str, has_confirmation: bool) -> None:
 
         c3, c4 = st.columns(2)
         new_due = c3.date_input(due_label, value=None)
-        new_who = c4.selectbox("Assigned To", _ASSIGNED_OPTIONS)
+        new_who = c4.selectbox("Assigned To", get_members())
 
         new_year = None
         new_quarter = None
@@ -330,7 +346,6 @@ def _add_modal(category: str, user_email: str, has_confirmation: bool) -> None:
         if not new_type.strip():
             st.error(f"{filing_label} is required.")
         else:
-            from sa_rebuild.compliance.db import add_filing
             year_val    = int(new_year) if new_year else None
             quarter_val = new_quarter.strip() if new_quarter else None
             period_val  = (f"{quarter_val} {year_val}".strip()
@@ -368,7 +383,6 @@ def _delete_modal(rows: list[dict], user_email: str) -> None:
     st.divider()
     confirm, cancel = st.columns(2)
     if confirm.button("Yes, delete", key="del_confirm", type="primary", use_container_width=True):
-        from sa_rebuild.compliance.db import delete_filing
         failed = []
         deleted_ids = {r["id"] for r in rows}
         for r in rows:
@@ -397,7 +411,6 @@ def _history_modal(row: dict) -> None:
         f"{row.get('assigned_to', '')}"
     )
     st.divider()
-    from sa_rebuild.compliance.db import get_filing_history
     history = get_filing_history(row["id"])
     if not history:
         st.info("No history yet — status changes are logged automatically.")
@@ -425,7 +438,6 @@ def _do_import(raw: bytes, category: str, user_email: str) -> None:
         st.error("CSV must have a `filing_type` column. Download the template for the correct format.")
         return
 
-    from sa_rebuild.compliance.db import add_filing
     added, errors = 0, []
     new_ids: set = st.session_state.get(f"new_ids_{category}", set())
 
@@ -536,7 +548,6 @@ def _render_filing_tab(
     user_email: str,
     has_confirmation: bool = False,
 ) -> None:
-    from sa_rebuild.compliance.db import ensure_order, move_rows
 
     rows = _load(category)
     ensure_order(rows)
@@ -605,26 +616,26 @@ def _render_filing_tab(
     # ── Action bar (above table) ──────────────────────────────────────────────
     b1, b2, b3, b4, b5, b6 = st.columns(6)
 
-    if b1.button("✏️ Edit", key=f"btn_edit_{category}",
+    if b1.button("Edit", key=f"btn_edit_{category}",
                  disabled=n_sel != 1, use_container_width=True,
                  help="Select exactly one row to edit"):
         _edit_modal(selected_rows[0], user_email, has_confirmation, category)
 
-    if b2.button(f"🗑️ Delete{f' ({n_sel})' if n_sel else ''}",
+    if b2.button(f"Delete{f' ({n_sel})' if n_sel else ''}",
                  key=f"btn_del_{category}",
                  disabled=n_sel == 0, use_container_width=True,
                  help="Select one or more rows to delete"):
         _delete_modal(selected_rows, user_email)
 
-    if b3.button("➕ Add", key=f"btn_add_{category}", use_container_width=True):
+    if b3.button("+ Add", key=f"btn_add_{category}", use_container_width=True):
         _add_modal(category, user_email, has_confirmation)
 
-    if b4.button("🕐 History", key=f"btn_hist_{category}",
+    if b4.button("History", key=f"btn_hist_{category}",
                  disabled=n_sel != 1, use_container_width=True,
                  help="Select one row to view change history"):
         _history_modal(selected_rows[0])
 
-    if b5.button("↑ Move up", key=f"btn_up_{category}",
+    if b5.button("↑ Up", key=f"btn_up_{category}",
                  disabled=not can_up, use_container_width=True,
                  help="Move selected row(s) up — saves to database"):
         group = [filtered[i] for i in selected_indices]
@@ -636,7 +647,7 @@ def _render_filing_tab(
         }
         st.rerun()
 
-    if b6.button("↓ Move down", key=f"btn_dn_{category}",
+    if b6.button("↓ Down", key=f"btn_dn_{category}",
                  disabled=not can_dn, use_container_width=True,
                  help="Move selected row(s) down — saves to database"):
         group = [filtered[i] for i in selected_indices]
@@ -739,11 +750,112 @@ def _render_dashboard() -> None:
         st.markdown(f"- **{name}** — `{url}` — {note}")
 
 
+# ── settings ─────────────────────────────────────────────────────────────────
+
+@st.dialog("Remove Member")
+def _remove_member_modal(member: dict) -> None:
+
+    name = member["name"]
+    filing_count = count_filings_by_assignee(name)
+
+    if filing_count:
+        st.warning(
+            f"**{name}** is assigned to **{filing_count} filing(s)**. "
+            "Choose who to reassign them to before removing."
+        )
+        other_names = [m["name"] for m in get_members_with_ids() if m["id"] != member["id"]]
+        existing_options = ["LLC"] + other_names
+        mode = st.radio("Reassign to", ["Existing member", "New name"], horizontal=True)
+        if mode == "Existing member":
+            reassign_to = st.selectbox("Member", existing_options)
+            new_member_name = None
+        else:
+            reassign_to = None
+            new_member_name = st.text_input("New member name", placeholder="Full name or display name")
+    else:
+        st.info(f"No filings are currently assigned to **{name}**.")
+        reassign_to = None
+        new_member_name = None
+
+    st.divider()
+    c_confirm, c_cancel = st.columns(2)
+    if c_confirm.button("Remove", type="primary", use_container_width=True):
+        if filing_count:
+            target = (new_member_name or "").strip() if new_member_name is not None else reassign_to
+            if not target:
+                st.error("Enter a name to reassign to.")
+                return
+            if new_member_name is not None and new_member_name.strip():
+                add_member(new_member_name.strip())
+            reassign_filings(name, target)
+        delete_member(member["id"])
+        st.rerun()
+    if c_cancel.button("Cancel", use_container_width=True):
+        st.rerun()
+
+
+def _render_settings_tab() -> None:
+
+    st.subheader("Company Info")
+    co = get_company_info()
+    with st.form("form_company_info"):
+        new_name = st.text_input(
+            "Company name",
+            value=co.get("name") or _COMPANY["name"],
+        )
+        new_formed = st.text_input(
+            "Formation date",
+            value=co.get("formed", ""),
+            placeholder="e.g. April 27, 2026",
+        )
+        if st.form_submit_button("Save", type="primary"):
+            save_company_info({"name": new_name.strip(), "formed": new_formed.strip()})
+            st.success("Saved.")
+            st.rerun()
+
+    st.divider()
+    st.subheader("Members")
+    st.caption("These names appear in the 'Assigned To' dropdown throughout the app.")
+
+    members = get_members_with_ids()
+    if members:
+        for m in members:
+            col_name, col_del = st.columns([6, 1])
+            col_name.write(m["name"])
+            if col_del.button("Remove", key=f"del_member_{m['id']}", help=f"Remove {m['name']}"):
+                _remove_member_modal(m)
+    else:
+        st.info("No members yet — add one below or click 'Sync from filings'.")
+
+    c_add, c_sync = st.columns(2)
+
+    with c_add:
+        with st.form("form_add_member", clear_on_submit=True):
+            new_member = st.text_input("Add member", placeholder="Full name or display name")
+            if st.form_submit_button("Add", type="primary"):
+                if new_member.strip():
+                    add_member(new_member.strip())
+                    st.rerun()
+                else:
+                    st.error("Name cannot be empty.")
+
+    with c_sync:
+        st.markdown("**Sync from existing filings**")
+        st.caption("Reads every 'Assigned To' in the database and adds any missing names.")
+        if st.button("Sync now", key="btn_sync_members"):
+            added = sync_members_from_filings()
+            if added:
+                st.success(f"Added {added} new member(s).")
+                st.rerun()
+            else:
+                st.info("All assignees are already in the members list.")
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 _CSS = """
 <style>
-/* ── full-width layout: cover both old (.block-container) and new (stMainBlockContainer) ── */
+/* ── full-width layout ── */
 .main .block-container,
 div[data-testid="stMainBlockContainer"] {
     max-width: 100% !important;
@@ -751,26 +863,21 @@ div[data-testid="stMainBlockContainer"] {
     padding-right: 1rem !important;
 }
 
-/* ── buttons: target the <p> inside that Streamlit emotion wraps text in ── */
-.stButton > button p,
-.stDownloadButton > button p,
-[data-testid="stButton"] > button p,
-[data-testid="stDownloadButton"] > button p,
-button[data-testid^="baseButton"] p {
+/* ── buttons: use bare `button` so !important beats all emotion class selectors ── */
+button {
     font-size: 0.68rem !important;
-    line-height: 1.2 !important;
-    margin: 0 !important;
+    height: 2rem !important;
+    min-height: 2rem !important;
+    max-height: 2rem !important;
+    padding: 0 0.5rem !important;
+    line-height: 1 !important;
+    box-sizing: border-box !important;
 }
-/* Also set on the button itself for inherited fallback */
-.stButton > button,
-.stDownloadButton > button,
-[data-testid="stButton"] > button,
-[data-testid="stDownloadButton"] > button,
-button[data-testid^="baseButton"] {
+/* Also target every child node (p/span/div) that emotion may wrap text in */
+button * {
     font-size: 0.68rem !important;
-    padding: 0.18rem 0.4rem !important;
-    min-height: 1.7rem !important;
-    line-height: 1.2 !important;
+    line-height: 1 !important;
+    margin: 0 !important;
 }
 
 /* ── multiselect labels, tags, dropdown ── */
@@ -791,19 +898,16 @@ button[data-testid^="baseButton"] {
     padding: 3px 8px !important;
 }
 
-/* ── dialog / modal: smaller font, cap width ── */
+/* ── dialog / modal ── */
 [role="dialog"] p,
 [role="dialog"] label,
-[role="dialog"] label p,
-[role="dialog"] .stMarkdown p {
+[role="dialog"] label p {
     font-size: 0.82rem !important;
 }
 [role="dialog"] input,
 [role="dialog"] textarea {
     font-size: 0.82rem !important;
 }
-/* Streamlit wraps the modal content in a div with a fixed width class;
-   override to cap at a comfortable reading width */
 [data-testid="stDialog"] > div {
     max-width: 560px !important;
     width: 560px !important;
@@ -813,7 +917,7 @@ button[data-testid^="baseButton"] {
 
 
 def main() -> None:
-    st.markdown(_CSS, unsafe_allow_html=True)
+    st.html(_CSS)
     if not _firebase_ready():
         st.warning(
             "**Firebase not configured.**  \n"
@@ -826,7 +930,7 @@ def main() -> None:
                 "1. Create a Firebase project at console.firebase.google.com\n"
                 "2. Enable Firestore Database (us-east1)\n"
                 "3. Enable Authentication → Email/Password\n"
-                "4. Create user accounts (Kadiatu & Emmanuel)\n"
+                "4. Create user accounts for each member\n"
                 "5. Generate service account key → save as `service_account.json`\n"
                 "6. Get Web API Key → add to `.env` as `FIREBASE_WEB_API_KEY`\n"
                 "7. Run `python scripts/seed_compliance.py path/to/tracker.xlsx`\n\n"
@@ -847,13 +951,14 @@ def main() -> None:
         st.divider()
 
     st.title("📋 LLC Compliance Tracker")
-    st.caption(
-        f"{_COMPANY['name']}  |  EIN: {_COMPANY['ein']}  |  "
-        f"NJ ID: {_COMPANY['nj_id']}  |  Formed: {_COMPANY['formed']}"
-    )
+    _co = get_company_info()
+    _caption = _co.get("name") or _COMPANY["name"]
+    if _co.get("formed"):
+        _caption += f"  |  Formed: {_co['formed']}"
+    st.caption(_caption)
 
-    tab_dash, tab_q, tab_a, tab_ot = st.tabs(
-        ["📊 Dashboard", "🗓️ Quarterly", "📆 Annual", "✅ One-Time"]
+    tab_dash, tab_q, tab_a, tab_ot, tab_cfg = st.tabs(
+        ["📊 Dashboard", "🗓️ Quarterly", "📆 Annual", "✅ One-Time", "⚙️ Settings"]
     )
 
     with tab_dash:
@@ -870,6 +975,9 @@ def main() -> None:
     with tab_ot:
         st.subheader("One-Time & Setup Items")
         _render_filing_tab("one_time", user["email"], has_confirmation=True)
+
+    with tab_cfg:
+        _render_settings_tab()
 
 
 main()

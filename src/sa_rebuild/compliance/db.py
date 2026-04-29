@@ -4,8 +4,6 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-import streamlit as st
-
 from .firebase_client import get_db
 
 
@@ -169,3 +167,70 @@ def add_filing(data: dict[str, Any], user_email: str) -> str:
 def delete_filing(doc_id: str) -> None:
     db = get_db()
     db.collection("filings").document(doc_id).delete()
+
+
+# ── config / members ──────────────────────────────────────────────────────────
+
+def get_members() -> list[str]:
+    """Return assignable names from the 'members' collection, always prepending 'LLC'."""
+    db = get_db()
+    docs = db.collection("members").stream()
+    names = sorted(d.to_dict().get("name", "") for d in docs)
+    names = [n for n in names if n]
+    return ["LLC"] + names
+
+
+def get_members_with_ids() -> list[dict]:
+    """Return [{id, name}, ...] sorted by name — used by the Settings UI."""
+    db = get_db()
+    docs = db.collection("members").stream()
+    rows = [{"id": d.id, "name": d.to_dict().get("name", "")} for d in docs]
+    return sorted(rows, key=lambda r: r["name"])
+
+
+def add_member(name: str) -> None:
+    get_db().collection("members").add({"name": name.strip()})
+
+
+def delete_member(doc_id: str) -> None:
+    get_db().collection("members").document(doc_id).delete()
+
+
+def count_filings_by_assignee(name: str) -> int:
+    db = get_db()
+    return len(list(db.collection("filings").where("assigned_to", "==", name).stream()))
+
+
+def reassign_filings(old_name: str, new_name: str) -> int:
+    """Update every filing assigned to old_name → new_name. Returns count updated."""
+    db = get_db()
+    docs = list(db.collection("filings").where("assigned_to", "==", old_name).stream())
+    for doc in docs:
+        doc.reference.update({"assigned_to": new_name})
+    return len(docs)
+
+
+def get_company_info() -> dict:
+    """Return the 'config/company' document (keys: name, formed, etc.)."""
+    db = get_db()
+    doc = db.collection("config").document("company").get()
+    return doc.to_dict() or {}
+
+
+def save_company_info(data: dict) -> None:
+    """Create or overwrite the 'config/company' document."""
+    get_db().collection("config").document("company").set(data)
+
+
+def sync_members_from_filings() -> int:
+    """Add any assigned_to value from filings that isn't already in members. Returns count added."""
+    db = get_db()
+    existing = {d.to_dict().get("name", "") for d in db.collection("members").stream()}
+    assigned = {
+        d.to_dict().get("assigned_to", "")
+        for d in db.collection("filings").stream()
+    }
+    to_add = sorted(n for n in assigned if n and n != "LLC" and n not in existing)
+    for name in to_add:
+        db.collection("members").add({"name": name})
+    return len(to_add)
