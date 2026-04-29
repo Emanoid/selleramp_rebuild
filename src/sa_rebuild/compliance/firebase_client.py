@@ -55,6 +55,7 @@ def firebase_configured() -> bool:
     """Return True if enough env vars are present to attempt a connection."""
     has_sa = bool(
         os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+        or os.getenv("FIREBASE_SERVICE_ACCOUNT_B64")
         or Path(os.getenv("FIREBASE_SERVICE_ACCOUNT", "service_account.json")).exists()
     )
     has_api_key = bool(os.getenv("FIREBASE_WEB_API_KEY"))
