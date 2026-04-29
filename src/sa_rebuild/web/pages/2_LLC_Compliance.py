@@ -151,7 +151,7 @@ def _display_df(rows: list[dict], category: str) -> pd.DataFrame:
         return pd.DataFrame([
             {
                 "":             badge(r["id"]),
-                "#":            i,
+                "#":            r.get("order", i),
                 "Year":         r.get("year", ""),
                 "Filing Type":  r.get("filing_type", ""),
                 "Jurisdiction": r.get("jurisdiction", ""),
@@ -173,7 +173,7 @@ def _display_df(rows: list[dict], category: str) -> pd.DataFrame:
         return pd.DataFrame([
             {
                 "":             badge(r["id"]),
-                "#":            i,
+                "#":            r.get("order", i),
                 "Year":         r.get("year", ""),
                 "Filing":       r.get("filing_type", ""),
                 "Jurisdiction": r.get("jurisdiction", ""),
@@ -194,7 +194,7 @@ def _display_df(rows: list[dict], category: str) -> pd.DataFrame:
         return pd.DataFrame([
             {
                 "":               badge(r["id"]),
-                "#":              i,
+                "#":              r.get("order", i),
                 "Item":           r.get("filing_type", ""),
                 "Jurisdiction":   r.get("jurisdiction", ""),
                 "Due / Target":   r.get("due_date"),
