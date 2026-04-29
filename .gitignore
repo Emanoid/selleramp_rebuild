@@ -17,4 +17,13 @@ output/*.csv
 input/*.csv
 !input/example.csv
 
+
 .DS_Store
+
+# Firebase — never commit credentials
+service_account.json
+*service_account*.json
+streamlit_secrets.toml
+.streamlit/secrets.toml
+
+*venv*

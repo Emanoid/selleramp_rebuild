@@ -12,8 +12,7 @@
       "RunCommand",
       "ExecuteCommand",
       "Shell",
-      "Bash",
-      "Bash(python3 -c \"import pydantic; print\\('pydantic', pydantic.VERSION\\)\")"
+      "Bash"
     ]
   }
 }

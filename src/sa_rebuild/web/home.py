@@ -30,11 +30,23 @@ st.subheader("Available tools")
 col1, col2 = st.columns(2, gap="large")
 
 with col1:
-    st.markdown("#### FBA Calculator")
+    st.markdown("#### 🧮 FBA Calculator")
     st.markdown(
         "Upload a CSV of UPCs or ASINs with your wholesale cost. "
-        "Get a per-row Buy / Caution / Skip verdict — recommended sell price, "
+        "Get a per-row **Buy / Caution / Skip** verdict — recommended sell price, "
         "fees, ROI, monthly sales, competition analysis, and a direct storefront link. "
-        "Powered by your Keepa Pro key."
+        "Powered by your Keepa Pro key. Picks up where it left off if interrupted."
     )
     st.info("Select **FBA Calculator** in the sidebar to open this tool.")
+
+with col2:
+    st.markdown("#### 📋 LLC Compliance Tracker")
+    st.markdown(
+        "Live replacement for the Excel compliance tracker. "
+        "Tracks all **quarterly, annual, and one-time** filing requirements "
+        "for Central Line Group LLC. Mark filings done, log confirmation numbers, "
+        "see what's overdue and coming up next, and review the full audit trail "
+        "of every status change. "
+        "Members and company info managed in-app — no spreadsheet editing needed."
+    )
+    st.info("Select **LLC Compliance** in the sidebar to open this tool. Login required.")
