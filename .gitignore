@@ -23,3 +23,5 @@ input/*.csv
 # Firebase — never commit credentials
 service_account.json
 *service_account*.json
+
+*venv*
