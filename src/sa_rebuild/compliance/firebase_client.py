@@ -33,17 +33,11 @@ def get_db():
         # Option B: path to a local JSON file
         sa_path = Path(os.getenv("FIREBASE_SERVICE_ACCOUNT", "service_account.json"))
         if not sa_path.exists():
-            sa_json = st.secrets["FIREBASE_SERVICE_ACCOUNT"]
-            if sa_json:
-                sa_dict = json.loads(sa_json)
-                cred = credentials.Certificate(sa_dict)
-                return
-            else:
-                raise FileNotFoundError(
-                    f"Service account not found at '{sa_path}'.\n"
-                    "Set FIREBASE_SERVICE_ACCOUNT env var or paste JSON into "
-                    "FIREBASE_SERVICE_ACCOUNT_JSON. See compliance_tool_plan.md."
-                )
+            raise FileNotFoundError(
+                f"Service account not found at '{sa_path}'.\n"
+                "Set FIREBASE_SERVICE_ACCOUNT env var or paste JSON into "
+                "FIREBASE_SERVICE_ACCOUNT_JSON. See compliance_tool_plan.md."
+            )
         cred = credentials.Certificate(str(sa_path))
 
     firebase_admin.initialize_app(cred)
@@ -55,7 +49,6 @@ def firebase_configured() -> bool:
     has_sa = bool(
         os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
         or Path(os.getenv("FIREBASE_SERVICE_ACCOUNT", "service_account.json")).exists()
-        or st.secrets["FIREBASE_SERVICE_ACCOUNT"]
     )
-    has_api_key = bool(os.getenv("FIREBASE_WEB_API_KEY")) or bool(st.secrets["FIREBASE_WEB_API_KEY"])
+    has_api_key = bool(os.getenv("FIREBASE_WEB_API_KEY"))
     return has_sa and has_api_key
