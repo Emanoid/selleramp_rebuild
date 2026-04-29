@@ -161,17 +161,15 @@ def _display_df(rows: list[dict], has_confirmation: bool) -> pd.DataFrame:
 # ── dialogs ───────────────────────────────────────────────────────────────────
 
 @st.dialog("✏️ Edit Filing", width="large")
-def _edit_modal(row: dict, user_email: str, has_confirmation: bool) -> None:
-    st.markdown(
-        f"**{row['filing_type']}**  \n"
-        f"{row.get('period', '')}  ·  {row.get('jurisdiction', '')}  ·  {row.get('assigned_to', '')}"
-    )
+def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: str) -> None:
+    st.markdown(f"**{row['filing_type']}** — {row.get('period', '')} — {row.get('jurisdiction', '')}")
     st.divider()
 
+    # ── most-commonly-updated fields first ────────────────────────────────────
     c1, c2 = st.columns(2)
     cur_status = row.get("status", "Pending")
     new_status = c1.selectbox(
-        "Status", _STATUS_OPTIONS,
+        "Status *", _STATUS_OPTIONS,
         index=_STATUS_OPTIONS.index(cur_status) if cur_status in _STATUS_OPTIONS else 0,
     )
     new_date_filed = c2.date_input("Date Filed", value=row.get("date_filed") or None)
@@ -179,17 +177,68 @@ def _edit_modal(row: dict, user_email: str, has_confirmation: bool) -> None:
     if has_confirmation:
         new_conf = st.text_input("Confirmation #", value=row.get("confirmation_number") or "")
 
-    new_notes = st.text_area("Notes", value=row.get("notes") or "", height=100)
+    new_notes = st.text_area("Notes", value=row.get("notes") or "", height=80)
 
+    # ── structural fields ─────────────────────────────────────────────────────
+    st.divider()
+    st.caption("Structural details — update only if the filing itself changes")
+
+    c3, c4 = st.columns(2)
+    new_type = c3.text_input("Filing Type", value=row.get("filing_type", ""))
+    _JURISDICTIONS = ["Federal", "New Jersey", "N/A"]
+    cur_jur = row.get("jurisdiction", "N/A")
+    new_jur = c4.selectbox(
+        "Jurisdiction", _JURISDICTIONS,
+        index=_JURISDICTIONS.index(cur_jur) if cur_jur in _JURISDICTIONS else 2,
+    )
+
+    c5, c6 = st.columns(2)
+    new_period = c5.text_input("Period", value=row.get("period", ""))
+    new_year = c6.number_input(
+        "Year", min_value=2024, max_value=2035,
+        value=int(row.get("year") or date.today().year), step=1,
+    )
+
+    c7, c8 = st.columns(2)
+    cur_due = row.get("due_date")
+    new_due = c7.date_input(
+        "Due Date", value=cur_due if isinstance(cur_due, date) else None,
+    )
+    cur_who = row.get("assigned_to", "LLC")
+    new_who = c8.selectbox(
+        "Assigned To", _ASSIGNED_OPTIONS,
+        index=_ASSIGNED_OPTIONS.index(cur_who) if cur_who in _ASSIGNED_OPTIONS else 0,
+    )
+
+    new_quarter = None
+    if category == "quarterly":
+        new_quarter = st.text_input(
+            "Quarter", value=row.get("quarter", ""),
+            placeholder="e.g. Q2 (Apr-Jun)",
+        )
+
+    st.divider()
     save, cancel = st.columns(2)
-    if save.button("💾 Save", type="primary", use_container_width=True):
+    if save.button("💾 Save", type="primary", use_container_width=True, key="edit_save"):
         from sa_rebuild.compliance.db import update_filing
-        updates: dict = {"status": new_status, "date_filed": new_date_filed, "notes": new_notes}
+        updates: dict = {
+            "status":       new_status,
+            "date_filed":   new_date_filed,
+            "notes":        new_notes,
+            "filing_type":  new_type.strip(),
+            "jurisdiction": new_jur,
+            "period":       new_period.strip(),
+            "year":         int(new_year),
+            "due_date":     new_due,
+            "assigned_to":  new_who,
+        }
+        if category == "quarterly":
+            updates["quarter"] = new_quarter.strip() or None
         if has_confirmation:
-            updates["confirmation_number"] = new_conf
+            updates["confirmation_number"] = new_conf.strip() or None
         update_filing(row["id"], updates, user_email)
         st.rerun()
-    if cancel.button("Cancel", use_container_width=True):
+    if cancel.button("Cancel", use_container_width=True, key="edit_cancel"):
         st.rerun()
 
 
@@ -370,32 +419,38 @@ def _render_filing_tab(
 
     # ── action bar ───────────────────────────────────────────────────────────
     st.divider()
-    b1, b2, b3, b4, b5 = st.columns(5)
+    b1, b2, b3, b4, _b5 = st.columns(5)
 
     if b1.button(
         "✏️ Edit",
+        key=f"btn_edit_{category}",
         disabled=n_sel != 1,
         use_container_width=True,
         help="Select exactly one row to edit",
     ):
-        _edit_modal(selected_rows[0], user_email, has_confirmation)
+        _edit_modal(selected_rows[0], user_email, has_confirmation, category)
 
     if b2.button(
         f"🗑️ Delete{f' ({n_sel})' if n_sel else ''}",
+        key=f"btn_del_{category}",
         disabled=n_sel == 0,
         use_container_width=True,
         help="Select one or more rows to delete",
     ):
         _delete_modal(selected_rows, user_email)
 
-    if b3.button("➕ Add Filing", use_container_width=True):
+    if b3.button("➕ Add Filing", key=f"btn_add_{category}", use_container_width=True):
         _add_modal(category, user_email, has_confirmation)
 
-    if n_sel == 1 and b4.button("🕐 History", use_container_width=True):
-        _history_modal(selected_rows[0])
-    elif n_sel != 1:
-        b4.button("🕐 History", use_container_width=True, disabled=True,
-                  help="Select one row to view its history")
+    if b4.button(
+        "🕐 History",
+        key=f"btn_hist_{category}",
+        use_container_width=True,
+        disabled=n_sel != 1,
+        help="Select one row to view its history",
+    ):
+        if n_sel == 1:
+            _history_modal(selected_rows[0])
 
     # ── import / export ──────────────────────────────────────────────────────
     st.divider()
@@ -403,6 +458,7 @@ def _render_filing_tab(
 
     imp1.download_button(
         "📥 Download CSV template",
+        key=f"btn_tmpl_{category}",
         data=_TEMPLATES[category],
         file_name=f"{category}_template.csv",
         mime="text/csv",
@@ -412,7 +468,7 @@ def _render_filing_tab(
 
     show_import_key = f"show_import_{category}"
     st.session_state.setdefault(show_import_key, False)
-    if imp2.button("📤 Import from CSV", use_container_width=True):
+    if imp2.button("📤 Import from CSV", key=f"btn_imp_{category}", use_container_width=True):
         st.session_state[show_import_key] = not st.session_state[show_import_key]
 
     if st.session_state[show_import_key]:
