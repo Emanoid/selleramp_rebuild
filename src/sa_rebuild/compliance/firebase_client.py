@@ -4,6 +4,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import base64
+
 
 from dotenv import load_dotenv
 import streamlit as st
@@ -26,7 +28,12 @@ def get_db():
 
     # Option A: JSON content stored in Streamlit Cloud Secrets
     sa_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
-    if sa_json:
+    b64 = os.getenv("FIREBASE_SERVICE_ACCOUNT_B64")
+    if b64:
+        sa_json = base64.b64decode(b64).decode("utf-8")
+        sa_dict = json.loads(sa_json)
+        cred = credentials.Certificate(sa_dict)
+    elif sa_json:
         sa_dict = json.loads(sa_json)
         cred = credentials.Certificate(sa_dict)
     else:
