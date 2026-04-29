@@ -1,0 +1,1501 @@
+"""Interface module to download Amazon product and history data from keepa.com."""
+
+import json
+import logging
+import time
+from collections.abc import Sequence
+from pathlib import Path
+from typing import Any, Literal
+
+import requests
+from tqdm import tqdm
+
+from keepa.constants import SCODES
+from keepa.models.domain import Domain
+from keepa.models.product_params import ProductParams
+from keepa.models.status import Status
+from keepa.query_keys import DEAL_REQUEST_KEYS
+from keepa.utils import _domain_to_dcode, _parse_seller, _parse_stats, format_items, parse_csv
+
+log = logging.getLogger(__name__)
+
+REQUEST_LIMIT = 100
+
+
+class Keepa:
+    r"""
+    Synchronous Python interface to keepa data backend.
+
+    Initializes API with access key. Access key can be obtained by signing up
+    for a reoccurring or one time plan. To obtain a key, sign up for one at
+    `Keepa Data <https://get.keepa.com/d7vrq>`_.
+
+    Parameters
+    ----------
+    accesskey : str
+        64 character access key string.
+    timeout : float, default: 10.0
+        Default timeout when issuing any request. This is not a time limit on
+        the entire response download; rather, an exception is raised if the
+        server has not issued a response for timeout seconds. Setting this to
+        0.0 disables the timeout, but will cause any request to hang
+        indefiantly should keepa.com be down
+    logging_level: str, default: "DEBUG"
+        Logging level to use. Default is "DEBUG". Other options are "INFO",
+        "WARNING", "ERROR", and "CRITICAL".
+    check_key : bool, default: True
+        Check the keepa key on initialization and update the number of
+        available tokens. This is a free check and does not cost any tokens,
+        but does slow down the time to initialize. Disable this to speed up
+        init at the risk of using an invalid key when querying for a product.
+
+    Examples
+    --------
+    Create the api object.
+
+    >>> import keepa
+    >>> key = "<REAL_KEEPA_KEY>"
+    >>> api = keepa.Keepa(key)
+
+    Request data from two ASINs.
+
+    >>> products = api.query(["0439064872", "1426208081"])
+
+    Print item details.
+
+    >>> print("Item 1")
+    >>> print("\t ASIN: {:s}".format(products[0]["asin"]))
+    >>> print("\t Title: {:s}".format(products[0]["title"]))
+    Item 1
+        ASIN: 0439064872
+        Title: Harry Potter and the Chamber of Secrets (2)
+
+    Print item price.
+
+    >>> usedprice = products[0]["data"]["USED"]
+    >>> usedtimes = products[0]["data"]["USED_time"]
+    >>> print("\t Used price: ${:.2f}".format(usedprice[-1]))
+    >>> print("\t as of: {:s}".format(str(usedtimes[-1])))
+        Used price: $0.52
+        as of: 2023-01-03 04:46:00
+
+    """
+
+    accesskey: str
+    tokens_left: int
+    status: Status
+    _timeout: float
+
+    def __init__(
+        self,
+        accesskey: str,
+        timeout: float = 10.0,
+        logging_level: str = "DEBUG",
+        check_key: bool = False,
+    ) -> None:
+        """Initialize server connection."""
+        self.accesskey = accesskey
+        self.tokens_left = 0
+        self._timeout = timeout
+
+        # Set up logging
+        levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        if logging_level not in levels:
+            raise TypeError("logging_level must be one of: " + ", ".join(levels))
+        log.setLevel(logging_level)
+
+        # Check available tokens on init
+        log.info("Using key ending in %s", accesskey[-6:])
+        self.status = Status()
+        if check_key:
+            self.update_status()
+
+    @property
+    def time_to_refill(self) -> float:
+        """
+        Return the time to refill in seconds.
+
+        Examples
+        --------
+        Return the time to refill. If you have tokens available, this time
+        should be 0.0 seconds.
+
+        >>> import keepa
+        >>> key = "<REAL_KEEPA_KEY>"
+        >>> api = keepa.Keepa(key)
+        >>> api.time_to_refill
+        0.0
+
+        """
+        if (
+            self.status.refillRate is None
+            or self.status.refillIn is None
+            or self.status.timestamp is None
+        ):
+            self.update_status()
+
+        if (
+            self.status.refillRate is None
+            or self.status.refillIn is None
+            or self.status.timestamp is None
+        ):
+            raise RuntimeError("Failed to update status")
+
+        # Get current timestamp in milliseconds from UNIX epoch
+        now = int(time.time() * 1000)
+        time_at_refill = self.status.timestamp + self.status.refillIn
+
+        # wait plus one second fudge factor
+        time_to_refill = time_at_refill - now + 1000
+        if time_to_refill < 0:
+            time_to_refill = 0
+
+        # Account for negative tokens left
+        if self.tokens_left < 0:
+            time_to_refill += (abs(self.tokens_left) / self.status.refillRate) * 60000
+
+        # Return value in seconds
+        return time_to_refill / 1000.0
+
+    def update_status(self) -> None:
+        """Update available tokens."""
+        # number of available tokens is always returned
+        self._request("token", {"key": self.accesskey}, wait=False)
+
+    def wait_for_tokens(self) -> None:
+        """Check if there are any remaining tokens and waits if none are available."""
+        self.update_status()
+
+        # Wait if no tokens available
+        if self.tokens_left <= 0:
+            tdelay = self.time_to_refill
+            log.warning("Waiting %.0f seconds for additional tokens", tdelay)
+            time.sleep(tdelay)
+            self.update_status()
+
+    def download_graph_image(
+        self,
+        asin: str,
+        filename: str | Path,
+        domain: str | Domain = "US",
+        wait: bool = True,
+        **graph_kwargs: dict[str, Any],
+    ) -> None:
+        """
+        Download the graph image of an ASIN from keepa.
+
+        See `Graph Image API
+        <https://keepa.com/#!discuss/t/graph-image-api/7928>`_ for more
+        details.
+
+        Parameters
+        ----------
+        asin : str
+            The ASIN of the product.
+        filename : str | pathlib.Path
+            Path to save the png to.
+        domain : str | keepa.Domain, default: 'US'
+            A valid Amazon domain. See :class:`keepa.Domain`.
+        wait : bool, default: True
+            Wait for available tokens before querying the keepa backend.
+        **graph_kwargs : dict[str, Any], optional
+            Optional graph keyword arguments. See `Graph Image API
+            <https://keepa.com/#!discuss/t/graph-image-api/7928>`_ for more
+            details.
+
+        Notes
+        -----
+        Graph images are cached for 90 minutes on a per-user basis. The cache
+        invalidates if any parameter changes. Submitting the exact same request
+        within this time frame will not consume any tokens.
+
+        Examples
+        --------
+        Download a keepa graph image showing the current Amazon price, new
+        price, and the sales rank of a product with ASIN ``"B09YNQCQKR"``.
+
+        >>> from keepa import Keepa
+        >>> api = Keepa("<YOUR_API_KEY>")
+        >>> api.download_graph_image(
+        ...     asin="B09YNQCQKR",
+        ...     filename="product_graph.png",
+        ...     amazon=1,
+        ...     new=1,
+        ...     salesrank=1,
+        ... )
+
+        Show Amazon price, new and used graphs, buy box and FBA, for last 365
+        days, with custom width/height and custom colors. See
+        <https://keepa.com/#!discuss/t/graph-image-api/7928>`_ for more
+        details.
+
+        api.download_graph_image(
+            asin="B09YNQCQKR",
+            filename="product_graph_365.png",
+            domain="US",
+            amazon=1,
+            new=1,
+            used=1,
+            bb=1,
+            fba=1,
+            range=365,
+            width=800,
+            height=400,
+            cBackground="ffffff",
+            cAmazon="FFA500",
+            cNew="8888dd",
+            cUsed="444444",
+            cBB="ff00b4",
+            cFBA="ff5722"
+        )
+
+        """
+        payload = {
+            "asin": asin,
+            "key": self.accesskey,
+            "domain": _domain_to_dcode(domain),
+        }
+        payload.update(graph_kwargs)
+
+        resp = self._request("graphimage", payload, wait=wait, is_json=False)
+
+        first_chunk = True
+        filename = Path(filename)
+        with open(filename, "wb") as f:
+            for chunk in resp.iter_content(8192):
+                if first_chunk:
+                    if not chunk.startswith(b"\x89PNG\r\n\x1a\n"):
+                        raise ValueError(
+                            "Response from api.keepa.com/graphimage is not a valid PNG image"
+                        )
+                    first_chunk = False
+                f.write(chunk)
+
+    def query(
+        self,
+        items: str | Sequence[str],
+        stats: int | None = None,
+        domain: str | Domain = "US",
+        history: bool = True,
+        offers: int | None = None,
+        update: int | None = None,
+        to_datetime: bool = True,
+        rating: bool = False,
+        out_of_stock_as_nan: bool = True,
+        stock: bool = False,
+        product_code_is_asin: bool = True,
+        progress_bar: bool = True,
+        buybox: bool = False,
+        wait: bool = True,
+        days: int | None = None,
+        only_live_offers: bool | None = None,
+        raw: bool = False,
+        videos: bool = False,
+        aplus: bool = False,
+        extra_params: dict[str, Any] | None = {},
+    ) -> list[dict[str, Any]]:
+        """
+        Perform a product query of a list, array, or single ASIN.
+
+        Returns a list of product data with one entry for each product.
+
+        Parameters
+        ----------
+        items : str, Sequence[str]
+            A list, array, or single asin, UPC, EAN, or ISBN-13 identifying a
+            product. ASINs should be 10 characters and match a product on
+            Amazon. Items not matching Amazon product or duplicate Items will
+            return no data. When using non-ASIN items, set
+            ``product_code_is_asin`` to ``False``.
+
+        stats : int or date, optional
+            No extra token cost. If specified the product object will
+            have a stats field with quick access to current prices,
+            min/max prices and the weighted mean values. If the offers
+            parameter was used it will also provide stock counts and
+            buy box information.
+
+            You can provide the stats parameter in two forms:
+
+            Last x days (positive integer value): calculates the stats
+            of the last x days, where x is the value of the stats
+            parameter.  Interval: You can provide a date range for the
+            stats calculation. You can specify the range via two
+            timestamps (unix epoch time milliseconds) or two date
+            strings (ISO8601, with or without time in UTC).
+
+        domain : str | keepa.Domain, default: 'US'
+            A valid Amazon domain. See :class:`keepa.Domain`.
+
+        history : bool, optional
+            When set to True includes the price, sales, and offer
+            history of a product.  Set to False to reduce request time
+            if data is not required.  Default True
+
+        offers : int, optional
+            Adds available offers to product data. Default 0. Must be between
+            20 and 100. Enabling this also enables the ``"buyBoxUsedHistory"``.
+
+        update : int, optional
+            If data is older than the input integer, keepa will update their
+            database and return live data. If set to 0 (live data), request may
+            cost an additional token. Default (``None``) will not update.
+
+        to_datetime : bool, default: True
+            When ``True`` casts the time values of the product data
+            (e.g. ``"AMAZON_TIME"``) to ``datetime.datetime``. For example
+            ``datetime.datetime(2025, 10, 24, 10, 40)``. When ``False``, the
+            values are represented as ``numpy`` ``"<M8[m]"``. This has no
+            effect on pandas dataframes (e.g. ``"df_AMAZON"``).
+
+        rating : bool, default: False
+            When set to to True, includes the existing RATING and
+            COUNT_REVIEWS history of the csv field.
+
+        out_of_stock_as_nan : bool, default: True
+            When True, prices are NAN when price category is out of
+            stock.  When False, prices are -0.01.
+
+        stock : bool, default: False
+            Can only be used if the offers parameter is also True. If
+            True, the stock will be collected for all retrieved live
+            offers. Note: We can only determine stock up 10 qty. Stock
+            retrieval takes additional time, expect the request to
+            take longer. Existing stock history will be included
+            whether or not the stock parameter is used.
+
+        product_code_is_asin : bool, default: True
+            The type of product code you are requesting. True when
+            product code is an ASIN, an Amazon standard identification
+            number, or 'code', for UPC, EAN, or ISBN-13 codes.
+
+        progress_bar : bool, default: True
+            Display a progress bar using ``tqdm``.
+
+        buybox : bool, optional
+            Additional token cost: 2 per product). When true the
+            product and statistics object will include all available
+            buy box related data:
+
+            - current price, price history, and statistical values
+            - buyBoxSellerIdHistory
+            - all buy box fields in the statistics object
+
+            The buybox parameter does not trigger a fresh data collection. If
+            the offers parameter is used the buybox parameter is ignored, as
+            the offers parameter also provides access to all buy box related
+            data. To access the statistics object the stats parameter is
+            required.
+
+        wait : bool, default: True
+            Wait for available tokens before querying the keepa backend.
+
+        only_live_offers : bool, optional
+            If set to True, the product object will only include live
+            marketplace offers (when used in combination with the
+            offers parameter). If you do not need historical offers
+            use this to have them removed from the response. This can
+            improve processing time and considerably decrease the size
+            of the response.
+
+        days : int, optional
+            Any positive integer value. If specified and has positive value X
+            the product object will limit all historical data to the recent X
+            days.  This includes the csv, buyBoxSellerIdHistory, salesRanks,
+            offers and offers.offerCSV fields. If you do not need old
+            historical data use this to have it removed from the response. This
+            can improve processing time and considerably decrease the size of
+            the response.  The parameter does not use calendar days - so 1 day
+            equals the last 24 hours.  The oldest data point of each field may
+            have a date value which is out of the specified range. This means
+            the value of the field has not changed since that date and is still
+            active.
+
+        raw : bool, default; False
+            When ``True``, return the raw request response. This is only
+            available in the non-async class.
+
+        videos : bool, default: False
+            Token Cost: No extra token cost
+
+            If ``True``, the videos metadata will be provided when
+            available. Using this parameter does not trigger an update to the
+            videos data; it only gives access to our existing data if
+            available. If you need up-to-date data, you have to use the offers
+            parameter.
+
+        aplus : bool, default: False
+            Token Cost: No extra token cost
+
+            If set to ``True`` the A+ content will be provided when
+            available. Using this parameter does not trigger an update to the
+            A+ content; it only gives access to our existing data if
+            available. If you need up-to-date data, you have to use the offers
+            parameter.
+
+        extra_params : dict[str, Any], optional
+            Dictionary of parameters that are not specifically called out in
+            the api. For example, a new parameters might be added to
+            `Request.java
+            <https://github.com/keepacom/api_backend/blob/master/src/main/java/com/keepa/api/backend/KeepaAPI.java>`_
+            and not yet supported in this function. For example,
+            `extra_params={'rental': 1}`.
+
+        Returns
+        -------
+        list
+            List of products when ``raw=False``. Each product within the list
+            is a dictionary. The keys of each item may vary, so see the keys
+            within each product for further details.
+
+            Each product should contain at a minimum a "data" key containing a
+            formatted dictionary. For the available fields see the notes
+            section.
+
+            When ``raw=True``, a list of unparsed responses are
+            returned as :class:`requests.models.Response`.
+
+            See: https://keepa.com/#!discuss/t/product-object/116
+
+        Notes
+        -----
+        The following are some of the fields a product dictionary. For a full
+        list and description, please see:
+        `product-object <https://keepa.com/#!discuss/t/product-object/116>`_
+
+        AMAZON
+            Amazon price history
+
+        NEW
+            Marketplace/3rd party New price history - Amazon is
+            considered to be part of the marketplace as well, so if
+            Amazon has the overall lowest new (!) price, the
+            marketplace new price in the corresponding time interval
+            will be identical to the Amazon price (except if there is
+            only one marketplace offer). Shipping and Handling costs
+            not included!
+
+        USED
+            Marketplace/3rd party Used price history
+
+        SALES
+            Sales Rank history. Not every product has a Sales Rank.
+
+        LISTPRICE
+            List Price history
+
+        COLLECTIBLE
+            Collectible Price history
+
+        REFURBISHED
+            Refurbished Price history
+
+        NEW_FBM_SHIPPING
+            3rd party (not including Amazon) New price history
+            including shipping costs, only fulfilled by merchant
+            (FBM).
+
+        LIGHTNING_DEAL
+            3rd party (not including Amazon) New price history
+            including shipping costs, only fulfilled by merchant
+            (FBM).
+
+        WAREHOUSE
+            Amazon Warehouse Deals price history. Mostly of used
+            condition, rarely new.
+
+        NEW_FBA
+             Price history of the lowest 3rd party (not including
+             Amazon/Warehouse) New offer that is fulfilled by Amazon
+
+        COUNT_NEW
+             New offer count history
+
+        COUNT_USED
+            Used offer count history
+
+        COUNT_REFURBISHED
+             Refurbished offer count history
+
+        COUNT_COLLECTIBLE
+             Collectible offer count history
+
+        RATING
+             The product's rating history. A rating is an integer from
+             0 to 50 (e.g. 45 = 4.5 stars)
+
+        COUNT_REVIEWS
+            The product's review count history.
+
+        BUY_BOX_SHIPPING
+            The price history of the buy box. If no offer qualified
+            for the buy box the price has the value -1. Including
+            shipping costs.
+
+        USED_NEW_SHIPPING
+            "Used - Like New" price history including shipping costs.
+
+        USED_VERY_GOOD_SHIPPING
+            "Used - Very Good" price history including shipping costs.
+
+        USED_GOOD_SHIPPING
+            "Used - Good" price history including shipping costs.
+
+        USED_ACCEPTABLE_SHIPPING
+            "Used - Acceptable" price history including shipping costs.
+
+        COLLECTIBLE_NEW_SHIPPING
+            "Collectible - Like New" price history including shipping
+            costs.
+
+        COLLECTIBLE_VERY_GOOD_SHIPPING
+            "Collectible - Very Good" price history including shipping
+            costs.
+
+        COLLECTIBLE_GOOD_SHIPPING
+            "Collectible - Good" price history including shipping
+            costs.
+
+        COLLECTIBLE_ACCEPTABLE_SHIPPING
+            "Collectible - Acceptable" price history including
+            shipping costs.
+
+        REFURBISHED_SHIPPING
+            Refurbished price history including shipping costs.
+
+        TRADE_IN
+            The trade in price history. Amazon trade-in is not
+            available for every locale.
+
+        BUY_BOX_SHIPPING
+            The price history of the buy box. If no offer qualified
+            for the buy box the price has the value -1. Including
+            shipping costs.  The ``buybox`` parameter must be True for
+            this field to be in the data.
+
+        Examples
+        --------
+        Query for product with ASIN ``'B0088PUEPK'`` using the synchronous
+        keepa interface.
+
+        >>> import keepa
+        >>> key = "<REAL_KEEPA_KEY>"
+        >>> api = keepa.Keepa(key)
+        >>> response = api.query("B0088PUEPK")
+        >>> response[0]["title"]
+        'Western Digital 1TB WD Blue PC Internal Hard Drive HDD - 7200 RPM,
+        SATA 6 Gb/s, 64 MB Cache, 3.5" - WD10EZEX'
+
+        Query for product with ASIN ``'B0088PUEPK'`` using the asynchronous
+        keepa interface.
+
+        >>> import asyncio
+        >>> import keepa
+        >>> async def main():
+        ...     key = "<REAL_KEEPA_KEY>"
+        ...     api = await keepa.AsyncKeepa().create(key)
+        ...     return await api.query("B0088PUEPK")
+        ...
+        >>> response = asyncio.run(main())
+        >>> response[0]["title"]
+        'Western Digital 1TB WD Blue PC Internal Hard Drive HDD - 7200 RPM,
+        SATA 6 Gb/s, 64 MB Cache, 3.5" - WD10EZEX'
+
+        Load in product offers and convert the buy box data into a
+        ``pandas.DataFrame``.
+
+        >>> import keepa
+        >>> key = "<REAL_KEEPA_KEY>"
+        >>> api = keepa.Keepa(key)
+        >>> response = api.query("B0088PUEPK", offers=20)
+        >>> product = response[0]
+        >>> buybox_info = product["buyBoxUsedHistory"]
+        >>> df = keepa.process_used_buybox(buybox_info)
+                       datetime         user_id         condition  isFBA
+        0   2022-11-02 16:46:00  A1QUAC68EAM09F   Used - Like New   True
+        1   2022-11-13 10:36:00  A18WXU4I7YR6UA  Used - Very Good  False
+        2   2022-11-15 23:50:00   AYUGEV9WZ4X5O   Used - Like New  False
+        3   2022-11-17 06:16:00  A18WXU4I7YR6UA  Used - Very Good  False
+        4   2022-11-17 10:56:00   AYUGEV9WZ4X5O   Used - Like New  False
+        ..                  ...             ...               ...    ...
+        115 2023-10-23 10:00:00   AYUGEV9WZ4X5O   Used - Like New  False
+        116 2023-10-25 21:14:00  A1U9HDFCZO1A84   Used - Like New  False
+        117 2023-10-26 04:08:00   AYUGEV9WZ4X5O   Used - Like New  False
+        118 2023-10-27 08:14:00  A1U9HDFCZO1A84   Used - Like New  False
+        119 2023-10-27 12:34:00   AYUGEV9WZ4X5O   Used - Like New  False
+
+        Query a video with the "videos" metadata.
+
+        >>> response = api.query("B00UFMKSDW", history=False, videos=True)
+        >>> product = response[0]
+        >>> "videos" in product
+        True
+
+
+        """
+        # Format items into numpy array
+        try:
+            items = format_items(items)
+        except BaseException:
+            raise ValueError("Invalid product codes input")
+        if not len(items):
+            raise ValueError("No valid product codes")
+
+        nitems = len(items)
+        if nitems == 1:
+            log.debug("Executing single product query")
+        else:
+            log.debug("Executing %d item product query", nitems)
+
+        if extra_params is None:
+            extra_params = {}
+
+        # check offer input
+        if offers:
+            if not isinstance(offers, int):
+                raise TypeError('Parameter "offers" must be an interger')
+
+            if offers > 100 or offers < 20:
+                raise ValueError('Parameter "offers" must be between 20 and 100')
+
+        if self.status.refillRate is None or self.status.refillIn is None:
+            self.update_status()
+        if self.status.refillRate is None or self.status.refillIn is None:
+            raise RuntimeError("Failed to update status")
+
+        # Report time to completion
+        if self.status.refillRate is not None:
+            tcomplete = (
+                float(nitems - self.tokens_left) / self.status.refillRate
+                - (60000 - self.status.refillIn) / 60000.0
+            )
+            if tcomplete < 0.0:
+                tcomplete = 0.5
+            log.debug(
+                "Estimated time to complete %d request(s) is %.2f minutes",
+                nitems,
+                tcomplete,
+            )
+            log.debug("\twith a refill rate of %d token(s) per minute", self.status.refillRate)
+
+        # product list
+        products = []
+
+        pbar = None
+        if progress_bar:
+            pbar = tqdm(total=nitems)
+
+        # Number of requests is dependent on the number of items and
+        # request limit.  Use available tokens first
+        idx = 0  # or number complete
+        while idx < nitems:
+            nrequest = nitems - idx
+
+            # cap request
+            if nrequest > REQUEST_LIMIT:
+                nrequest = REQUEST_LIMIT
+
+            # request from keepa and increment current position
+            item_request = items[idx : idx + nrequest]  # noqa: E203
+            response = self._product_query(
+                item_request,
+                product_code_is_asin,
+                stats=stats,
+                domain=domain,
+                stock=stock,
+                offers=offers,
+                update=update,
+                history=history,
+                rating=rating,
+                to_datetime=to_datetime,
+                out_of_stock_as_nan=out_of_stock_as_nan,
+                buybox=buybox,
+                wait=wait,
+                days=days,
+                only_live_offers=only_live_offers,
+                raw=raw,
+                videos=videos,
+                aplus=aplus,
+                **extra_params,
+            )
+            idx += nrequest
+            if raw:
+                products.append(response)
+            else:
+                products.extend(response["products"])
+
+            if pbar is not None:
+                pbar.update(nrequest)
+
+        return products
+
+    def _product_query(self, items, product_code_is_asin=True, **kwargs):
+        """Send query to keepa server and returns parsed JSON result.
+
+        Parameters
+        ----------
+        items : np.ndarray
+            Array of asins.  If UPC, EAN, or ISBN-13, as_asin must be
+            False.  Must be between 1 and 100 ASINs
+
+        as_asin : bool, optional
+            Interpret product codes as ASINs only.
+
+        stats : int or date format
+            Set the stats time for get sales rank inside this range
+
+        domain : str | keepa.Domain, default: 'US'
+            A valid Amazon domain. See :class:`keepa.Domain`.
+
+        offers : bool, optional
+            Adds product offers to product data.
+
+        update : int, optional
+            If data is older than the input integer, keepa will update
+            their database and return live data.  If set to 0 (live
+            data), then request may cost an additional token.
+
+        history : bool, optional
+            When set to True includes the price, sales, and offer
+            history of a product.  Set to False to reduce request time
+            if data is not required.
+
+        Returns
+        -------
+        products : list
+            List of products.  Length equal to number of successful
+            ASINs.
+
+        refillIn : float
+            Time in milliseconds to the next refill of tokens.
+
+        refilRate : float
+            Number of tokens refilled per minute
+
+        timestamp : float
+
+        tokensLeft : int
+            Remaining tokens
+
+        tz : int
+            Timezone.  0 is UTC
+
+        """
+        # ASINs convert to comma joined string
+        assert len(items) <= 100
+
+        if product_code_is_asin:
+            kwargs["asin"] = ",".join(items)
+        else:
+            kwargs["code"] = ",".join(items)
+
+        kwargs["key"] = self.accesskey
+        kwargs["domain"] = _domain_to_dcode(kwargs["domain"])
+
+        # Convert bool values to 0 and 1.
+        kwargs["stock"] = int(kwargs["stock"])
+        kwargs["history"] = int(kwargs["history"])
+        kwargs["rating"] = int(kwargs["rating"])
+        kwargs["buybox"] = int(kwargs["buybox"])
+        kwargs["videos"] = int(kwargs["videos"])
+        kwargs["aplus"] = int(kwargs["aplus"])
+
+        if kwargs["update"] is None:
+            del kwargs["update"]
+        else:
+            kwargs["update"] = int(kwargs["update"])
+
+        if kwargs["offers"] is None:
+            del kwargs["offers"]
+        else:
+            kwargs["offers"] = int(kwargs["offers"])
+
+        if kwargs["only_live_offers"] is None:
+            del kwargs["only_live_offers"]
+        else:
+            # Keepa's param actually doesn't use snake_case.
+            kwargs["only-live-offers"] = int(kwargs.pop("only_live_offers"))
+
+        if kwargs["days"] is None:
+            del kwargs["days"]
+        else:
+            assert kwargs["days"] > 0
+
+        if kwargs["stats"] is None:
+            del kwargs["stats"]
+
+        out_of_stock_as_nan = kwargs.pop("out_of_stock_as_nan", True)
+        to_datetime = kwargs.pop("to_datetime", True)
+
+        # Query and replace csv with parsed data if history enabled
+        wait = bool(kwargs.get("wait"))
+        kwargs.pop("wait", None)
+        raw_response = kwargs.pop("raw", False)
+        response = self._request("product", kwargs, wait=wait, raw_response=raw_response)
+
+        if kwargs["history"] and not raw_response:
+            if "products" not in response:
+                raise RuntimeError("No products in response. Possibly invalid ASINs")
+
+            for product in response["products"]:
+                if product["csv"]:  # if data exists
+                    product["data"] = parse_csv(product["csv"], to_datetime, out_of_stock_as_nan)
+
+        if kwargs.get("stats", None) and not raw_response:
+            for product in response["products"]:
+                stats = product.get("stats", None)
+                if stats:
+                    product["stats_parsed"] = _parse_stats(stats, to_datetime)
+
+        return response
+
+    def best_sellers_query(
+        self,
+        category: str,
+        rank_avg_range: Literal[0, 30, 90, 180] = 0,
+        variations: bool = False,
+        sublist: bool = False,
+        domain: str | Domain = "US",
+        wait: bool = True,
+    ):
+        """
+        Retrieve an ASIN list of the most popular products.
+
+        This is based on sales in a specific category or product group. See
+        "search_for_categories" for information on how to get a category.
+
+        Root category lists (e.g. "Home & Kitchen") or product group lists
+        contain up to 100,000 ASINs.
+
+        Sub-category lists (e.g. "Home Entertainment Furniture") contain up to
+        3,000 ASINs. As we only have access to the product's primary sales rank
+        and not the ones of all categories it is listed in, the sub-category
+        lists are created by us based on the product's primary sales rank and
+        do not reflect the actual ordering on Amazon.
+
+        Lists are ordered, starting with the best selling product.
+
+        Lists are updated daily. If a product does not have an accessible
+        sales rank it will not be included in the lists. This in particular
+        affects many products in the Clothing and Sports & Outdoors categories.
+
+        We can not correctly identify the sales rank reference category in all
+        cases, so some products may be misplaced.
+
+        See the keepa documentation at `Request Best Sellers
+        <https://keepa.com/#!discuss/t/best-sellers/1298>`_ for additional
+        details.
+
+        Parameters
+        ----------
+        category : str
+            The category node id of the category you want to request
+            the best sellers list for. You can find category node ids
+            via the category search :meth:`Keepa.search_for_categories`.
+        rank_avg_range : int, default: 0
+            Optionally specify to retrieve a best seller list based on a sales
+            rank average instead of the current sales rank. Valid values:
+
+            * 0: Use current rank
+            * 30: 30-day average
+            * 90: 90-day average
+            * 180: 180-day average
+        variations : bool, default: False
+            Restrict list entries to a single variation for items with multiple
+            variations. The variation returned will be the one with the highest
+            monthly units sold (if that data point is available). When
+            ``False`` (default), do not include variations. When ``True``,
+            return all variations.
+
+            By default we return one variation per parent. If the variations
+            share the same sales rank, the representative is the variation with
+            the highest monthly units sold. If monthly sold data is missing or
+            tied, the representative falls back to randomly picked one.
+        sublist : bool, default: False
+            By default (``False``), the best seller list for sub-categories is created
+            based on the product’s primary sales rank, if available. To request
+            a best seller list based on the sub-category sales rank
+            (classification rank), set this parameter to ``True``. Note that
+            not all products have a primary sales rank or a sub-category sales
+            rank and not all sub-category levels have sales ranks.
+        domain : str | keepa.Domain, default: 'US'
+            A valid Amazon domain. See :class:`keepa.Domain`.
+        wait : bool, default: True
+            Wait for available tokens before querying the keepa backend.
+
+        Returns
+        -------
+        list
+            List of best seller ASINs
+
+        Examples
+        --------
+        Query for the best sellers among the ``"movies"`` category.
+
+        >>> import keepa
+        >>> key = "<REAL_KEEPA_KEY>"
+        >>> api = keepa.Keepa(key)
+        >>> categories = api.search_for_categories("movies")
+        >>> category = list(categories.items())[0][0]
+        >>> asins = api.best_sellers_query(category)
+        >>> asins
+        ['B0BF3P5XZS',
+         'B08JQN5VDT',
+         'B09SP8JPPK',
+         '0999296345',
+         'B07HPG684T',
+         '1984825577',
+        ...
+
+        Query for the best sellers among the ``"movies"`` category using the
+        asynchronous keepa interface.
+
+        >>> import asyncio
+        >>> import keepa
+        >>> async def main():
+        ...     key = "<REAL_KEEPA_KEY>"
+        ...     api = await keepa.AsyncKeepa().create(key)
+        ...     categories = await api.search_for_categories("movies")
+        ...     category = list(categories.items())[0][0]
+        ...     return await api.best_sellers_query(category)
+        ...
+        >>> asins = asyncio.run(main())
+        >>> asins
+        ['B0BF3P5XZS',
+         'B08JQN5VDT',
+         'B09SP8JPPK',
+         '0999296345',
+         'B07HPG684T',
+         '1984825577',
+        ...
+
+        """
+        payload = {
+            "key": self.accesskey,
+            "domain": _domain_to_dcode(domain),
+            "variations": int(variations),
+            "sublist": int(sublist),
+            "category": category,
+            "range": rank_avg_range,
+        }
+
+        response = self._request("bestsellers", payload, wait=wait)
+        if "bestSellersList" not in response:
+            raise RuntimeError(f"Best sellers search results for {category} not yet available")
+
+        return response["bestSellersList"]["asinList"]
+
+    def search_for_categories(
+        self, searchterm: str, domain: str | Domain = "US", wait: bool = True
+    ) -> dict[str, Any]:
+        """
+        Search for categories from Amazon.
+
+        Parameters
+        ----------
+        searchterm : str
+            Input search term.
+        domain : str | keepa.Domain, default: 'US'
+            A valid Amazon domain. See :class:`keepa.Domain`.
+        wait : bool, default: True
+            Wait for available tokens before querying the keepa backend.
+
+        Returns
+        -------
+        dict[str, Any]
+            The response contains a categories dictionary with all matching
+            categories.
+
+        Examples
+        --------
+        Print all categories from science.
+
+        >>> import keepa
+        >>> key = "<REAL_KEEPA_KEY>"
+        >>> api = keepa.Keepa(key)
+        >>> categories = api.search_for_categories("science")
+        >>> for cat_id in categories:
+        ...     print(cat_id, categories[cat_id]["name"])
+        ...
+        9091159011 Behavioral Sciences
+        8407535011 Fantasy, Horror & Science Fiction
+        8407519011 Sciences & Technology
+        12805 Science & Religion
+        13445 Astrophysics & Space Science
+        12038 Science Fiction & Fantasy
+        3207 Science, Nature & How It Works
+        144 Science Fiction & Fantasy
+
+        """
+        payload = {
+            "key": self.accesskey,
+            "domain": _domain_to_dcode(domain),
+            "type": "category",
+            "term": searchterm,
+        }
+
+        response = self._request("search", payload, wait=wait)
+        if response["categories"] == {}:  # pragma no cover
+            raise RuntimeError(
+                "Categories search results not yet available or no search terms found."
+            )
+        return response["categories"]
+
+    def category_lookup(
+        self,
+        category_id: int,
+        domain: str | Domain = "US",
+        include_parents=False,
+        wait: bool = True,
+    ) -> dict[str, Any]:
+        """
+        Return root categories given a categoryId.
+
+        Parameters
+        ----------
+        category_id : int
+            ID for specific category or 0 to return a list of root categories.
+        domain : str | keepa.Domain, default: 'US'
+            A valid Amazon domain. See :class:`keepa.Domain`.
+        include_parents : bool, default: False
+            Include parents.
+        wait : bool, default: True
+            Wait for available tokens before querying the keepa backend.
+
+        Returns
+        -------
+        dict[str, Any]
+            Output format is the same as :meth:`Keepa.`search_for_categories`.
+
+        Examples
+        --------
+        Use 0 to return all root categories.
+
+        >>> import keepa
+        >>> key = "<REAL_KEEPA_KEY>"
+        >>> api = keepa.Keepa(key)
+        >>> categories = api.category_lookup(0)
+
+        Output the first category.
+
+        >>> list(categories.values())[0]
+        {'domainId': 1,
+         'catId': 133140011,
+         'name': 'Kindle Store',
+         'children': [133141011,
+          133143011,
+          6766606011,
+          7529231011,
+          118656435011,
+          2268072011,
+          119757513011,
+          358606011,
+          3000677011,
+          1293747011],
+         'parent': 0,
+         'highestRank': 6984155,
+         'productCount': 6417325,
+         'contextFreeName': 'Kindle Store',
+         'lowestRank': 1,
+         'matched': True}
+
+        """
+        payload = {
+            "key": self.accesskey,
+            "domain": _domain_to_dcode(domain),
+            "category": category_id,
+            "parents": int(include_parents),
+        }
+
+        response = self._request("category", payload, wait=wait)
+        if response["categories"] == {}:  # pragma no cover
+            raise Exception("Category lookup results not yet available or no match found.")
+        return response["categories"]
+
+    def seller_query(
+        self,
+        seller_id: str | list[str],
+        domain: str | Domain = "US",
+        to_datetime: bool = True,
+        storefront: bool = False,
+        update: int | None = None,
+        wait: bool = True,
+    ):
+        """
+        Receive seller information for a given seller id or ids.
+
+        If a seller is not found no tokens will be consumed.
+
+        Token cost: 1 per requested seller
+
+        Parameters
+        ----------
+        seller_id : str or list[str]
+            The seller id of the merchant you want to request. For batch
+            requests, you may submit a list of 100 seller_ids.  The seller id
+            can also be found on Amazon on seller profile pages in the seller
+            parameter of the URL as well as in the offers results from a
+            product query.
+        domain : str | keepa.Domain, default: 'US'
+            A valid Amazon domain. See :class:`keepa.Domain`.
+        to_datetime : bool, default: True
+            When ``True`` casts the time values to ``datetime.datetime``. For
+            example ``datetime.datetime(2025, 10, 24, 10, 40)``. When
+            ``False``, the values are represented as ``numpy`` ``"<M8[m]"``.
+        storefront : bool, default: False
+            If specified the seller object will contain additional information
+            about what items the seller is listing on Amazon.  This includes a
+            list of ASINs as well as the total amount of items the seller has
+            listed. The following seller object fields will be set if data is
+            available: asinList, asinListLastSeen, totalStorefrontAsinsCSV. If
+            no data is available no additional tokens will be consumed. The
+            ASIN list can contain up to 100,000 items. As using the storefront
+            parameter does not trigger any new collection it does not increase
+            the processing time of the request, though the response may be much
+            bigger in size. The total storefront ASIN count will not be
+            updated, only historical data will be provided (when available).
+        update : int, optional
+            Positive integer value. If the last live data collection from
+            the Amazon storefront page is older than update hours force a
+            new collection. Use this parameter in conjunction with the
+            storefront parameter. Token cost will only be applied if a new
+            collection is triggered.
+
+            Using this parameter you can achieve the following:
+
+            - Retrieve data from Amazon: a storefront ASIN list
+              containing up to 2,400 ASINs, in addition to all ASINs
+              already collected through our database.
+            - Force a refresh: Always retrieve live data with the
+              value 0.
+            - Retrieve the total number of listings of this seller:
+              the totalStorefrontAsinsCSV field of the seller object
+              will be updated.
+        wait : bool, default: True
+            Wait for available tokens before querying the keepa backend.
+
+        Returns
+        -------
+        dict
+            Dictionary containing one entry per input ``seller_id``.
+
+        Examples
+        --------
+        Return the information from seller ``'A2L77EE7U53NWQ'``.
+
+        >>> import keepa
+        >>> key = "<REAL_KEEPA_KEY>"
+        >>> api = keepa.Keepa(key)
+        >>> seller_info = api.seller_query("A2L77EE7U53NWQ", "US")
+        >>> seller_info["A2L77EE7U53NWQ"]["sellerName"]
+        'Amazon Warehouse'
+
+        Notes
+        -----
+        Seller data is not available for Amazon China.
+
+        """
+        if isinstance(seller_id, list):
+            if len(seller_id) > 100:
+                err_str = "seller_id can contain at maximum 100 sellers"
+                raise RuntimeError(err_str)
+            seller = ",".join(seller_id)
+        else:
+            seller = seller_id
+
+        payload = {
+            "key": self.accesskey,
+            "domain": _domain_to_dcode(domain),
+            "seller": seller,
+        }
+
+        if storefront:
+            payload["storefront"] = int(storefront)
+        if update is not False:
+            payload["update"] = update
+
+        response = self._request("seller", payload, wait=wait)
+        return _parse_seller(response["sellers"], to_datetime)
+
+    def product_finder(
+        self,
+        product_parms: dict[str, Any] | ProductParams,
+        domain: str | Domain = "US",
+        wait: bool = True,
+        n_products: int = 50,
+    ) -> list[str]:
+        """
+        Query the keepa product database to find products matching criteria.
+
+        Almost all product fields can be searched for and sorted.
+
+        Parameters
+        ----------
+        product_parms : dict, ProductParams
+            Dictionary or :class:`keepa.ProductParams`.
+        domain : str | keepa.Domain, default: 'US'
+            A valid Amazon domain. See :class:`keepa.Domain`.
+        wait : bool, default: True
+            Wait for available tokens before querying the keepa backend.
+        n_products : int, default: 50
+            Maximum number of matching products returned by keepa. This can be
+            overridden by the 'perPage' key in ``product_parms``.
+
+        Returns
+        -------
+        list[str]
+            List of ASINs matching the product parameters.
+
+        Notes
+        -----
+        When using the ``'sort'`` key in the ``product_parms`` parameter, use a
+        compatible key along with the type of sort. For example:
+        ``["current_SALES", "asc"]``
+
+        Examples
+        --------
+        Query for the first 100 of Jim Butcher's books using the synchronous
+        ``keepa.Keepa`` class. Sort by current sales.
+
+        >>> import keepa
+        >>> api = keepa.Keepa("<ENTER_ACTUAL_KEY_HERE>")
+        >>> product_parms = {
+        ...     "author": "jim butcher",
+        ...     "sort": ["current_SALES", "asc"],
+        ... }
+        >>> asins = api.product_finder(product_parms, n_products=100)
+        >>> asins
+        ['B000HRMAR2',
+         '0578799790',
+         'B07PW1SVHM',
+        ...
+         'B003MXM744',
+         '0133235750',
+         'B01MXXLJPZ']
+
+        Alternatively, use the :class:`keepa.ProductParams`:
+
+        >>> product_parms = keepa.ProductParams(
+        ...     author="jim butcher",
+        ...     sort=["current_SALES", "asc"],
+        ... )
+        >>> asins = api.product_finder(product_parms, n_products=100)
+
+        Query for all of Jim Butcher's books using the asynchronous
+        ``keepa.AsyncKeepa`` class.
+
+        >>> import asyncio
+        >>> import keepa
+        >>> product_parms = {"author": "jim butcher"}
+        >>> async def main():
+        ...     key = "<REAL_KEEPA_KEY>"
+        ...     api = await keepa.AsyncKeepa().create(key)
+        ...     return await api.product_finder(product_parms)
+        ...
+        >>> asins = asyncio.run(main())
+        >>> asins
+        ['B000HRMAR2',
+         '0578799790',
+         'B07PW1SVHM',
+        ...
+         'B003MXM744',
+         '0133235750',
+         'B01MXXLJPZ']
+
+        """
+        if isinstance(product_parms, dict):
+            product_parms_valid = ProductParams(**product_parms)
+        else:
+            product_parms_valid = product_parms
+        product_parms_dict = product_parms_valid.model_dump(exclude_none=True)
+        product_parms_dict.setdefault("perPage", n_products)
+        payload = {
+            "key": self.accesskey,
+            "domain": _domain_to_dcode(domain),
+            "selection": json.dumps(product_parms_dict),
+        }
+
+        response = self._request("query", payload, wait=wait)
+        return response["asinList"]
+
+    def deals(
+        self, deal_parms: dict[str, Any], domain: str | Domain = "US", wait: bool = True
+    ) -> dict[str, Any]:
+        """Query the Keepa API for product deals.
+
+        You can find products that recently changed and match your
+        search criteria.  A single request will return a maximum of
+        150 deals.  Try out the deals page to first get accustomed to
+        the options:
+        https://keepa.com/#!deals
+
+        For more details please visit:
+        https://keepa.com/#!discuss/t/browsing-deals/338
+
+        Parameters
+        ----------
+        deal_parms : dict
+            Dictionary containing one or more of the following keys:
+
+            - ``"page"``: int
+            - ``"domainId"``: int
+            - ``"excludeCategories"``: list
+            - ``"includeCategories"``: list
+            - ``"priceTypes"``: list
+            - ``"deltaRange"``: list
+            - ``"deltaPercentRange"``: list
+            - ``"deltaLastRange"``: list
+            - ``"salesRankRange"``: list
+            - ``"currentRange"``: list
+            - ``"minRating"``: int
+            - ``"isLowest"``: bool
+            - ``"isLowestOffer"``: bool
+            - ``"isOutOfStock"``: bool
+            - ``"titleSearch"``: String
+            - ``"isRangeEnabled"``: bool
+            - ``"isFilterEnabled"``: bool
+            - ``"hasReviews"``: bool
+            - ``"filterErotic"``: bool
+            - ``"sortType"``: int
+            - ``"dateRange"``: int
+        domain : str | keepa.Domain, default: 'US'
+            A valid Amazon domain. See :class:`keepa.Domain`.
+        wait : bool, default: True
+            Wait for available tokens before querying the keepa backend.
+
+        Returns
+        -------
+        dict
+            Dictionary containing the deals including the following keys:
+
+            * ``'dr'`` - Ordered array of all deal objects matching your query.
+            * ``'categoryIds'`` - Contains all root categoryIds of the matched
+              deal products.
+            * ``'categoryNames'`` - Contains all root category names of the
+              matched deal products.
+            * ``'categoryCount'`` - Contains how many deal products in the
+              respective root category are found.
+
+        Examples
+        --------
+        Return deals from category 16310101 using the synchronous
+        ``keepa.Keepa`` class
+
+        >>> import keepa
+        >>> key = "<REAL_KEEPA_KEY>"
+        >>> api = keepa.Keepa(key)
+        >>> deal_parms = {
+        ...     "page": 0,
+        ...     "domainId": 1,
+        ...     "excludeCategories": [1064954, 11091801],
+        ...     "includeCategories": [16310101],
+        ... }
+        >>> deals = api.deals(deal_parms)
+
+        Get the title of the first deal.
+
+        >>> deals["dr"][0]["title"]
+        'Orange Cream Rooibos, Tea Bags - Vanilla, Orange | Caffeine-Free,
+        Antioxidant-rich, Hot & Iced | The Spice Hut, First Sip Of Tea'
+
+        Conduct the same query with the asynchronous ``keepa.AsyncKeepa``
+        class.
+
+        >>> import asyncio
+        >>> import keepa
+        >>> deal_parms = {
+        ...     "page": 0,
+        ...     "domainId": 1,
+        ...     "excludeCategories": [1064954, 11091801],
+        ...     "includeCategories": [16310101],
+        ... }
+        >>> async def main():
+        ...     key = "<REAL_KEEPA_KEY>"
+        ...     api = await keepa.AsyncKeepa().create(key)
+        ...     categories = await api.search_for_categories("movies")
+        ...     return await api.deals(deal_parms)
+        ...
+        >>> asins = asyncio.run(main())
+        >>> asins
+        ['B0BF3P5XZS',
+         'B08JQN5VDT',
+         'B09SP8JPPK',
+         '0999296345',
+         'B07HPG684T',
+         '1984825577',
+        ...
+
+        """
+        # verify valid keys
+        for key in deal_parms:
+            if key not in DEAL_REQUEST_KEYS:
+                raise ValueError(f'Invalid key "{key}"')
+
+            # verify json type
+            key_type = DEAL_REQUEST_KEYS[key]
+            deal_parms[key] = key_type(deal_parms[key])
+
+        deal_parms.setdefault("priceTypes", 0)
+
+        payload = {
+            "key": self.accesskey,
+            "domain": _domain_to_dcode(domain),
+            "selection": json.dumps(deal_parms),
+        }
+
+        return self._request("deal", payload, wait=wait)["deals"]
+
+    def _request(
+        self,
+        request_type: str,
+        payload: dict[str, Any],
+        wait: bool = True,
+        raw_response: bool = False,
+        is_json: bool = True,
+    ):
+        """
+        Query keepa api server.
+
+        Parses raw response from keepa into a json format. Handles errors and
+        waits for available tokens if allowed.
+        """
+        while True:
+            raw = requests.get(
+                f"https://api.keepa.com/{request_type}/?",
+                payload,
+                timeout=self._timeout,
+            )
+            status_code = str(raw.status_code)
+
+            if is_json:
+                try:
+                    response = raw.json()
+                except Exception:
+                    raise RuntimeError(f"Invalid JSON from Keepa API (status {status_code})")
+            else:
+                return raw
+
+            # user status is always returned
+            if "tokensLeft" in response:
+                self.tokens_left = response["tokensLeft"]
+                self.status.tokensLeft = self.tokens_left
+                log.info("%d tokens remain", self.tokens_left)
+            for key in ["refillIn", "refillRate", "timestamp"]:
+                if key in response:
+                    setattr(self.status, key, response[key])
+
+            if status_code == "200":
+                if raw_response:
+                    return raw
+                return response
+
+            if status_code == "429" and wait:
+                tdelay = self.time_to_refill
+                log.warning("Waiting %.0f seconds for additional tokens", tdelay)
+                time.sleep(tdelay)
+                continue
+
+            # otherwise, it's an error code
+            if status_code in SCODES:
+                raise RuntimeError(SCODES[status_code])
+            raise RuntimeError(f"REQUEST_FAILED. Status code: {status_code}")

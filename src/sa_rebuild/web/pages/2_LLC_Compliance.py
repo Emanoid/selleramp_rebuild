@@ -480,8 +480,20 @@ def _render_filters(category: str, rows: list[dict]) -> list[dict]:
     assignees = sorted({r["assigned_to"] for r in rows if r.get("assigned_to")})
     has_quarter = (category == "quarterly")
 
+    # Header row: label on left, clear button on right
+    lbl, _, clr = st.columns([3, 4, 2])
+    lbl.markdown("**Filters**")
+    if clr.button("✖ Clear filters", key=f"btn_clear_{category}", use_container_width=True,
+                  help="Reset all filters to defaults"):
+        for field in ("status", "year", "who", "quarter"):
+            k = _fk(category, field)
+            if k in st.session_state:
+                del st.session_state[k]
+        st.rerun()
+
+    # Multiselect row — full width now that Clear is on its own row
     n_cols = 4 if has_quarter else 3
-    cols = st.columns(n_cols + 1)
+    cols = st.columns(n_cols)
 
     # Status defaults to Pending + Overdue so Done rows are hidden unless requested
     sel_status = cols[0].multiselect(
@@ -508,14 +520,6 @@ def _render_filters(category: str, rows: list[dict]) -> list[dict]:
             key=_fk(category, "quarter"),
         )
 
-    if cols[-1].button("✖ Clear", key=f"btn_clear_{category}", use_container_width=True,
-                       help="Reset all filters to defaults"):
-        for field in ("status", "year", "who", "quarter"):
-            k = _fk(category, field)
-            if k in st.session_state:
-                del st.session_state[k]
-        st.rerun()
-
     return [
         r for r in rows
         if _matches(r.get("status"), sel_status)
@@ -535,81 +539,13 @@ def _render_filing_tab(
     from sa_rebuild.compliance.db import ensure_order, move_rows
 
     rows = _load(category)
-    ensure_order(rows)          # one-time lazy migration, no-op once done
-    filtered = _render_filters(category, rows)
+    ensure_order(rows)
 
-    if filtered:
-        st.caption(
-            f"{len(filtered)} of {len(rows)} rows  "
-            "— click a column header to sort, select rows to edit or delete"
-        )
-    else:
-        st.info("No filings match the current filters. Click **✖ Clear** to reset.")
+    # ── Import / export (top) ─────────────────────────────────────────────────
+    show_key = f"show_import_{category}"
+    st.session_state.setdefault(show_key, False)
 
-    display_df = _display_df(filtered, category)
-
-    event = st.dataframe(
-        display_df,
-        use_container_width=True,
-        hide_index=True,
-        selection_mode="multi-row",
-        on_select="rerun",
-        key=f"tbl_{category}",
-    )
-
-    selected_indices = event.selection.rows if hasattr(event, "selection") else []
-    selected_rows    = [filtered[i] for i in selected_indices if i < len(filtered)]
-    n_sel            = len(selected_rows)
-
-    # Action bar
-    st.divider()
-    b1, b2, b3, b4, b5, b6 = st.columns(6)
-
-    if b1.button("✏️ Edit", key=f"btn_edit_{category}",
-                 disabled=n_sel != 1, use_container_width=True,
-                 help="Select exactly one row to edit"):
-        _edit_modal(selected_rows[0], user_email, has_confirmation, category)
-
-    if b2.button(f"🗑️ Delete{f' ({n_sel})' if n_sel else ''}",
-                 key=f"btn_del_{category}",
-                 disabled=n_sel == 0, use_container_width=True,
-                 help="Select one or more rows to delete"):
-        _delete_modal(selected_rows, user_email)
-
-    if b3.button("➕ Add", key=f"btn_add_{category}", use_container_width=True):
-        _add_modal(category, user_email, has_confirmation)
-
-    if b4.button("🕐 History", key=f"btn_hist_{category}",
-                 disabled=n_sel != 1, use_container_width=True,
-                 help="Select one row to view change history"):
-        if n_sel == 1:
-            _history_modal(selected_rows[0])
-
-    sorted_sel = sorted(selected_indices)
-    can_up = bool(sorted_sel and sorted_sel[0] > 0)
-    can_dn = bool(sorted_sel and sorted_sel[-1] < len(filtered) - 1)
-
-    up_tip = "Move selected row(s) up — saves to database"
-    dn_tip = "Move selected row(s) down — saves to database"
-
-    if b5.button("↑ Move up", key=f"btn_up_{category}",
-                 disabled=not can_up, use_container_width=True, help=up_tip):
-        group  = [filtered[i] for i in sorted_sel]
-        upper  = filtered[sorted_sel[0] - 1]
-        move_rows([upper] + group, group + [upper])
-        st.rerun()
-
-    if b6.button("↓ Move down", key=f"btn_dn_{category}",
-                 disabled=not can_dn, use_container_width=True, help=dn_tip):
-        group = [filtered[i] for i in sorted_sel]
-        lower = filtered[sorted_sel[-1] + 1]
-        move_rows(group + [lower], [lower] + group)
-        st.rerun()
-
-    # Import / export
-    st.divider()
     imp1, imp2 = st.columns(2)
-
     imp1.download_button(
         "📥 Download CSV template",
         key=f"btn_tmpl_{category}",
@@ -618,9 +554,6 @@ def _render_filing_tab(
         mime="text/csv",
         use_container_width=True,
     )
-
-    show_key = f"show_import_{category}"
-    st.session_state.setdefault(show_key, False)
     if imp2.button("📤 Import from CSV", key=f"btn_imp_{category}", use_container_width=True):
         st.session_state[show_key] = not st.session_state[show_key]
 
@@ -649,8 +582,90 @@ def _render_filing_tab(
                         key=f"btn_confirm_import_{category}",
                         type="primary",
                     ):
-                        st.session_state[show_key] = False  # close before rerun inside _do_import
+                        st.session_state[show_key] = False
                         _do_import(raw, category, user_email)
+
+    st.divider()
+
+    # ── Filters ───────────────────────────────────────────────────────────────
+    filtered = _render_filters(category, rows)
+
+    # ── Selection from previous render (session state) ────────────────────────
+    tbl_state = st.session_state.get(f"tbl_{category}", {})
+    prev_sel = (
+        tbl_state.get("selection", {}).get("rows", [])
+        if isinstance(tbl_state, dict) else []
+    )
+    selected_indices = sorted(i for i in prev_sel if i < len(filtered))
+    selected_rows    = [filtered[i] for i in selected_indices]
+    n_sel            = len(selected_rows)
+    can_up = bool(selected_indices and selected_indices[0] > 0)
+    can_dn = bool(selected_indices and selected_indices[-1] < len(filtered) - 1)
+
+    # ── Action bar (above table) ──────────────────────────────────────────────
+    b1, b2, b3, b4, b5, b6 = st.columns(6)
+
+    if b1.button("✏️ Edit", key=f"btn_edit_{category}",
+                 disabled=n_sel != 1, use_container_width=True,
+                 help="Select exactly one row to edit"):
+        _edit_modal(selected_rows[0], user_email, has_confirmation, category)
+
+    if b2.button(f"🗑️ Delete{f' ({n_sel})' if n_sel else ''}",
+                 key=f"btn_del_{category}",
+                 disabled=n_sel == 0, use_container_width=True,
+                 help="Select one or more rows to delete"):
+        _delete_modal(selected_rows, user_email)
+
+    if b3.button("➕ Add", key=f"btn_add_{category}", use_container_width=True):
+        _add_modal(category, user_email, has_confirmation)
+
+    if b4.button("🕐 History", key=f"btn_hist_{category}",
+                 disabled=n_sel != 1, use_container_width=True,
+                 help="Select one row to view change history"):
+        _history_modal(selected_rows[0])
+
+    if b5.button("↑ Move up", key=f"btn_up_{category}",
+                 disabled=not can_up, use_container_width=True,
+                 help="Move selected row(s) up — saves to database"):
+        group = [filtered[i] for i in selected_indices]
+        upper = filtered[selected_indices[0] - 1]
+        move_rows([upper] + group, group + [upper])
+        # Shift selection indices up by 1 so the check follows the moved row
+        st.session_state[f"tbl_{category}"] = {
+            "selection": {"rows": [i - 1 for i in selected_indices], "columns": []}
+        }
+        st.rerun()
+
+    if b6.button("↓ Move down", key=f"btn_dn_{category}",
+                 disabled=not can_dn, use_container_width=True,
+                 help="Move selected row(s) down — saves to database"):
+        group = [filtered[i] for i in selected_indices]
+        lower = filtered[selected_indices[-1] + 1]
+        move_rows(group + [lower], [lower] + group)
+        # Shift selection indices down by 1 so the check follows the moved row
+        st.session_state[f"tbl_{category}"] = {
+            "selection": {"rows": [i + 1 for i in selected_indices], "columns": []}
+        }
+        st.rerun()
+
+    # ── Table ─────────────────────────────────────────────────────────────────
+    if filtered:
+        st.caption(
+            f"{len(filtered)} of {len(rows)} rows  "
+            "— click a column header to sort, select rows to edit"
+        )
+    else:
+        st.info("No filings match the current filters. Click **✖ Clear** to reset.")
+
+    display_df = _display_df(filtered, category)
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        selection_mode="multi-row",
+        on_select="rerun",
+        key=f"tbl_{category}",
+    )
 
 
 # ── dashboard ─────────────────────────────────────────────────────────────────
@@ -726,7 +741,79 @@ def _render_dashboard() -> None:
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
+_CSS = """
+<style>
+/* ── full-width layout: cover both old (.block-container) and new (stMainBlockContainer) ── */
+.main .block-container,
+div[data-testid="stMainBlockContainer"] {
+    max-width: 100% !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+}
+
+/* ── buttons: target the <p> inside that Streamlit emotion wraps text in ── */
+.stButton > button p,
+.stDownloadButton > button p,
+[data-testid="stButton"] > button p,
+[data-testid="stDownloadButton"] > button p,
+button[data-testid^="baseButton"] p {
+    font-size: 0.68rem !important;
+    line-height: 1.2 !important;
+    margin: 0 !important;
+}
+/* Also set on the button itself for inherited fallback */
+.stButton > button,
+.stDownloadButton > button,
+[data-testid="stButton"] > button,
+[data-testid="stDownloadButton"] > button,
+button[data-testid^="baseButton"] {
+    font-size: 0.68rem !important;
+    padding: 0.18rem 0.4rem !important;
+    min-height: 1.7rem !important;
+    line-height: 1.2 !important;
+}
+
+/* ── multiselect labels, tags, dropdown ── */
+[data-testid="stMultiSelect"] label,
+[data-testid="stMultiSelect"] label p {
+    font-size: 0.70rem !important;
+    margin-bottom: 0.05rem !important;
+}
+[data-testid="stMultiSelect"] [data-baseweb="tag"] span {
+    font-size: 0.62rem !important;
+}
+[data-testid="stMultiSelect"] [data-baseweb="select"] > div {
+    min-height: 28px !important;
+    font-size: 0.70rem !important;
+}
+[data-testid="stMultiSelect"] [data-baseweb="menu"] li {
+    font-size: 0.70rem !important;
+    padding: 3px 8px !important;
+}
+
+/* ── dialog / modal: smaller font, cap width ── */
+[role="dialog"] p,
+[role="dialog"] label,
+[role="dialog"] label p,
+[role="dialog"] .stMarkdown p {
+    font-size: 0.82rem !important;
+}
+[role="dialog"] input,
+[role="dialog"] textarea {
+    font-size: 0.82rem !important;
+}
+/* Streamlit wraps the modal content in a div with a fixed width class;
+   override to cap at a comfortable reading width */
+[data-testid="stDialog"] > div {
+    max-width: 560px !important;
+    width: 560px !important;
+}
+</style>
+"""
+
+
 def main() -> None:
+    st.markdown(_CSS, unsafe_allow_html=True)
     if not _firebase_ready():
         st.warning(
             "**Firebase not configured.**  \n"
