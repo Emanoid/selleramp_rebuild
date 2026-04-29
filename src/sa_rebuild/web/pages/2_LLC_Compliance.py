@@ -15,27 +15,6 @@ _SRC = _HERE.parents[3]
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-# Import all db functions at module level so stale-package errors surface on
-# startup rather than lazily when a tab is first clicked.
-from sa_rebuild.compliance.db import (  # noqa: E402
-    get_filings,
-    get_filing_history,
-    ensure_order,
-    move_rows,
-    update_filing,
-    add_filing,
-    delete_filing,
-    get_members,
-    get_members_with_ids,
-    add_member,
-    delete_member,
-    get_company_info,
-    save_company_info,
-    sync_members_from_filings,
-    count_filings_by_assignee,
-    reassign_filings,
-)
-
 # ── static data ───────────────────────────────────────────────────────────────
 
 _COMPANY = {
@@ -126,6 +105,7 @@ def _login_wall() -> Optional[dict]:
 
 
 def _load(category: str) -> list[dict]:
+    from sa_rebuild.compliance.db import get_filings
     return get_filings(category)
 
 
@@ -269,6 +249,7 @@ def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: st
         due_label,
         value=cur_due if isinstance(cur_due, date) else None,
     )
+    from sa_rebuild.compliance.db import get_members
     assigned_opts = get_members()
     cur_who = row.get("assigned_to", "LLC")
     new_who = c6.selectbox(
@@ -309,6 +290,7 @@ def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: st
             updates["period"]  = f"{new_quarter.strip()} {int(new_year)}".strip()
         if has_confirmation:
             updates["confirmation_number"] = new_conf.strip() or None
+        from sa_rebuild.compliance.db import update_filing
         update_filing(row["id"], updates, user_email)
         st.rerun()
     if cancel.button("Cancel", use_container_width=True, key="edit_cancel"):
@@ -327,6 +309,7 @@ def _add_modal(category: str, user_email: str, has_confirmation: bool) -> None:
 
         c3, c4 = st.columns(2)
         new_due = c3.date_input(due_label, value=None)
+        from sa_rebuild.compliance.db import get_members
         new_who = c4.selectbox("Assigned To", get_members())
 
         new_year = None
@@ -350,6 +333,7 @@ def _add_modal(category: str, user_email: str, has_confirmation: bool) -> None:
             quarter_val = new_quarter.strip() if new_quarter else None
             period_val  = (f"{quarter_val} {year_val}".strip()
                            if quarter_val else str(year_val or ""))
+            from sa_rebuild.compliance.db import add_filing
             new_id = add_filing({
                 "category":            category,
                 "filing_type":         new_type.strip(),
@@ -383,6 +367,7 @@ def _delete_modal(rows: list[dict], user_email: str) -> None:
     st.divider()
     confirm, cancel = st.columns(2)
     if confirm.button("Yes, delete", key="del_confirm", type="primary", use_container_width=True):
+        from sa_rebuild.compliance.db import delete_filing
         failed = []
         deleted_ids = {r["id"] for r in rows}
         for r in rows:
@@ -411,6 +396,7 @@ def _history_modal(row: dict) -> None:
         f"{row.get('assigned_to', '')}"
     )
     st.divider()
+    from sa_rebuild.compliance.db import get_filing_history
     history = get_filing_history(row["id"])
     if not history:
         st.info("No history yet — status changes are logged automatically.")
@@ -438,6 +424,7 @@ def _do_import(raw: bytes, category: str, user_email: str) -> None:
         st.error("CSV must have a `filing_type` column. Download the template for the correct format.")
         return
 
+    from sa_rebuild.compliance.db import add_filing
     added, errors = 0, []
     new_ids: set = st.session_state.get(f"new_ids_{category}", set())
 
@@ -549,6 +536,7 @@ def _render_filing_tab(
     has_confirmation: bool = False,
 ) -> None:
 
+    from sa_rebuild.compliance.db import ensure_order, move_rows
     rows = _load(category)
     ensure_order(rows)
 
@@ -754,7 +742,10 @@ def _render_dashboard() -> None:
 
 @st.dialog("Remove Member")
 def _remove_member_modal(member: dict) -> None:
-
+    from sa_rebuild.compliance.db import (
+        count_filings_by_assignee, reassign_filings,
+        add_member, delete_member, get_members_with_ids,
+    )
     name = member["name"]
     filing_count = count_filings_by_assignee(name)
 
@@ -795,6 +786,11 @@ def _remove_member_modal(member: dict) -> None:
 
 
 def _render_settings_tab() -> None:
+    from sa_rebuild.compliance.db import (
+        get_company_info, save_company_info,
+        get_members_with_ids, add_member,
+        sync_members_from_filings,
+    )
 
     st.subheader("Company Info")
     co = get_company_info()
@@ -951,6 +947,7 @@ def main() -> None:
         st.divider()
 
     st.title("📋 LLC Compliance Tracker")
+    from sa_rebuild.compliance.db import get_company_info
     _co = get_company_info()
     _caption = _co.get("name") or _COMPANY["name"]
     if _co.get("formed"):
