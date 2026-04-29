@@ -470,33 +470,47 @@ def _fk(category: str, field: str) -> str:
     return f"flt_{category}_{field}"
 
 
+def _matches(value, selected: list) -> bool:
+    """Empty list = no filter (show all). Non-empty = value must be in list."""
+    return not selected or value in selected
+
+
 def _render_filters(category: str, rows: list[dict]) -> list[dict]:
-    years     = sorted({r["year"] for r in rows if r.get("year")}, reverse=True)
+    years     = sorted({str(r["year"]) for r in rows if r.get("year")}, reverse=True)
     assignees = sorted({r["assigned_to"] for r in rows if r.get("assigned_to")})
-
     has_quarter = (category == "quarterly")
+
     n_cols = 4 if has_quarter else 3
-    cols = st.columns(n_cols + 1)  # +1 for Clear button
+    cols = st.columns(n_cols + 1)
 
-    sel_year = cols[0].selectbox(
-        "Year", ["All"] + [str(y) for y in years], key=_fk(category, "year"),
+    # Status defaults to Pending + Overdue so Done rows are hidden unless requested
+    sel_status = cols[0].multiselect(
+        "Status", _STATUS_OPTIONS,
+        default=["Pending", "Overdue"],
+        key=_fk(category, "status"),
     )
-    sel_who = cols[1].selectbox(
-        "Assigned To", ["All"] + assignees, key=_fk(category, "who"),
+    sel_years = cols[1].multiselect(
+        "Year", years, default=[],
+        placeholder="All years",
+        key=_fk(category, "year"),
     )
-    sel_status = cols[2].selectbox(
-        "Status", ["All"] + _STATUS_OPTIONS, key=_fk(category, "status"),
+    sel_who = cols[2].multiselect(
+        "Assigned To", assignees, default=[],
+        placeholder="Everyone",
+        key=_fk(category, "who"),
     )
-
-    sel_quarter = None
+    sel_quarter: list = []
     if has_quarter:
         quarters = sorted({r.get("quarter", "") for r in rows if r.get("quarter")})
-        sel_quarter = cols[3].selectbox(
-            "Quarter", ["All"] + quarters, key=_fk(category, "quarter"),
+        sel_quarter = cols[3].multiselect(
+            "Quarter", quarters, default=[],
+            placeholder="All quarters",
+            key=_fk(category, "quarter"),
         )
 
-    if cols[-1].button("✖ Clear", key=f"btn_clear_{category}", use_container_width=True):
-        for field in ("year", "who", "status", "quarter"):
+    if cols[-1].button("✖ Clear", key=f"btn_clear_{category}", use_container_width=True,
+                       help="Reset all filters to defaults"):
+        for field in ("status", "year", "who", "quarter"):
             k = _fk(category, field)
             if k in st.session_state:
                 del st.session_state[k]
@@ -504,11 +518,10 @@ def _render_filters(category: str, rows: list[dict]) -> list[dict]:
 
     return [
         r for r in rows
-        if (sel_year == "All"    or str(r.get("year")) == sel_year)
-        and (sel_who == "All"    or r.get("assigned_to") == sel_who)
-        and (sel_status == "All" or r.get("status") == sel_status)
-        and (sel_quarter is None or sel_quarter == "All"
-             or r.get("quarter") == sel_quarter)
+        if _matches(r.get("status"), sel_status)
+        and _matches(str(r.get("year", "")), sel_years)
+        and _matches(r.get("assigned_to"), sel_who)
+        and _matches(r.get("quarter"), sel_quarter)
     ]
 
 
@@ -519,7 +532,7 @@ def _render_filing_tab(
     user_email: str,
     has_confirmation: bool = False,
 ) -> None:
-    from sa_rebuild.compliance.db import ensure_order, swap_order
+    from sa_rebuild.compliance.db import ensure_order, move_rows
 
     rows = _load(category)
     ensure_order(rows)          # one-time lazy migration, no-op once done
@@ -572,20 +585,25 @@ def _render_filing_tab(
         if n_sel == 1:
             _history_modal(selected_rows[0])
 
-    sel_idx = selected_indices[0] if n_sel == 1 else None
-    can_up  = (sel_idx is not None and sel_idx > 0)
-    can_dn  = (sel_idx is not None and sel_idx < len(filtered) - 1)
+    sorted_sel = sorted(selected_indices)
+    can_up = bool(sorted_sel and sorted_sel[0] > 0)
+    can_dn = bool(sorted_sel and sorted_sel[-1] < len(filtered) - 1)
+
+    up_tip = "Move selected row(s) up — saves to database"
+    dn_tip = "Move selected row(s) down — saves to database"
 
     if b5.button("↑ Move up", key=f"btn_up_{category}",
-                 disabled=not can_up, use_container_width=True,
-                 help="Move selected row up (saves order to database)"):
-        swap_order(filtered[sel_idx], filtered[sel_idx - 1])
+                 disabled=not can_up, use_container_width=True, help=up_tip):
+        group  = [filtered[i] for i in sorted_sel]
+        upper  = filtered[sorted_sel[0] - 1]
+        move_rows([upper] + group, group + [upper])
         st.rerun()
 
     if b6.button("↓ Move down", key=f"btn_dn_{category}",
-                 disabled=not can_dn, use_container_width=True,
-                 help="Move selected row down (saves order to database)"):
-        swap_order(filtered[sel_idx], filtered[sel_idx + 1])
+                 disabled=not can_dn, use_container_width=True, help=dn_tip):
+        group = [filtered[i] for i in sorted_sel]
+        lower = filtered[sorted_sel[-1] + 1]
+        move_rows(group + [lower], [lower] + group)
         st.rerun()
 
     # Import / export
@@ -631,8 +649,8 @@ def _render_filing_tab(
                         key=f"btn_confirm_import_{category}",
                         type="primary",
                     ):
+                        st.session_state[show_key] = False  # close before rerun inside _do_import
                         _do_import(raw, category, user_email)
-                        st.session_state[show_key] = False
 
 
 # ── dashboard ─────────────────────────────────────────────────────────────────

@@ -83,13 +83,20 @@ def ensure_order(rows: list[dict]) -> None:
             r["order"] = order_val
 
 
-def swap_order(row_a: dict, row_b: dict) -> None:
-    """Swap the 'order' field between two filing rows (persists to Firestore)."""
+def move_rows(from_seq: list[dict], to_seq: list[dict]) -> None:
+    """Rotate order values so to_seq[i] receives from_seq[i]'s order.
+
+    Typical call for move-up:
+        move_rows([upper_neighbor] + group, group + [upper_neighbor])
+    Typical call for move-down:
+        move_rows(group + [lower_neighbor], [lower_neighbor] + group)
+    Both lists must have the same length and contain the same rows.
+    """
+    orders = [r.get("order") for r in from_seq]
     db = get_db()
-    db.collection("filings").document(row_a["id"]).update({"order": row_b["order"]})
-    db.collection("filings").document(row_b["id"]).update({"order": row_a["order"]})
-    # Keep in-memory dicts consistent so callers can rely on them
-    row_a["order"], row_b["order"] = row_b["order"], row_a["order"]
+    for row, order_val in zip(to_seq, orders):
+        db.collection("filings").document(row["id"]).update({"order": order_val})
+        row["order"] = order_val
 
 
 # ── write ─────────────────────────────────────────────────────────────────────
