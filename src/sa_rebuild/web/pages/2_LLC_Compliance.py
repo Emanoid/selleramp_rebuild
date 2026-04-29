@@ -519,7 +519,10 @@ def _render_filing_tab(
     user_email: str,
     has_confirmation: bool = False,
 ) -> None:
-    rows     = _load(category)
+    from sa_rebuild.compliance.db import ensure_order, swap_order
+
+    rows = _load(category)
+    ensure_order(rows)          # one-time lazy migration, no-op once done
     filtered = _render_filters(category, rows)
 
     if filtered:
@@ -547,7 +550,7 @@ def _render_filing_tab(
 
     # Action bar
     st.divider()
-    b1, b2, b3, b4, _b5 = st.columns(5)
+    b1, b2, b3, b4, b5, b6 = st.columns(6)
 
     if b1.button("✏️ Edit", key=f"btn_edit_{category}",
                  disabled=n_sel != 1, use_container_width=True,
@@ -568,6 +571,22 @@ def _render_filing_tab(
                  help="Select one row to view change history"):
         if n_sel == 1:
             _history_modal(selected_rows[0])
+
+    sel_idx = selected_indices[0] if n_sel == 1 else None
+    can_up  = (sel_idx is not None and sel_idx > 0)
+    can_dn  = (sel_idx is not None and sel_idx < len(filtered) - 1)
+
+    if b5.button("↑ Move up", key=f"btn_up_{category}",
+                 disabled=not can_up, use_container_width=True,
+                 help="Move selected row up (saves order to database)"):
+        swap_order(filtered[sel_idx], filtered[sel_idx - 1])
+        st.rerun()
+
+    if b6.button("↓ Move down", key=f"btn_dn_{category}",
+                 disabled=not can_dn, use_container_width=True,
+                 help="Move selected row down (saves order to database)"):
+        swap_order(filtered[sel_idx], filtered[sel_idx + 1])
+        st.rerun()
 
     # Import / export
     st.divider()
