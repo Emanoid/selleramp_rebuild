@@ -109,7 +109,7 @@ def _parse_date_str(val) -> Optional[date]:
         return val
     from datetime import datetime
     s = str(val).strip()
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%b %d, %Y", "%B %d, %Y"):
+    for fmt in ("%Y-%m-%d", "%m/%d/%y", "%m/%d/%Y", "%b %d, %Y", "%B %d, %Y"):
         try:
             return datetime.strptime(s, fmt).date()
         except ValueError:
