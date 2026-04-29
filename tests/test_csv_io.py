@@ -1,7 +1,7 @@
 """CSV input parsing + ReportWriter description-row behavior."""
 from pathlib import Path
 
-from sa_rebuild.csv_io import COLUMN_DESCRIPTIONS, REPORT_COLUMNS, ReportWriter, read_input
+from sa_rebuild.fba.csv_io import COLUMN_DESCRIPTIONS, REPORT_COLUMNS, ReportWriter, read_input
 
 
 def test_read_input_accepts_upc(tmp_path: Path):

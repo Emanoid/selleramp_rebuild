@@ -1,6 +1,6 @@
 import json
 
-from sa_rebuild import state as state_mod
+from sa_rebuild.fba import state as state_mod
 
 
 def test_save_and_resume_roundtrip(tmp_path, monkeypatch):

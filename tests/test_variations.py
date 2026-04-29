@@ -1,9 +1,9 @@
 """Variation viability — opt-in sibling fetching + scoring."""
 from datetime import datetime, timezone
 
-from sa_rebuild.analytics import variations
+from sa_rebuild.fba.analytics import variations
 from sa_rebuild.config import AppConfig
-from sa_rebuild.keepa_data import CSV_BUY_BOX_SHIPPING, KEEPA_EPOCH_MINUTES
+from sa_rebuild.fba.keepa_data import CSV_BUY_BOX_SHIPPING, KEEPA_EPOCH_MINUTES
 
 
 def _ktm(dt: datetime) -> int:
