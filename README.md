@@ -6,7 +6,7 @@ Internal tools for Central Line Group LLC — Amazon FBA sourcing and business c
 
 > **Version history**
 > `0.x.x` — desktop app era (macOS .app / Windows .exe, archived on `os_based_build`)
-> `1.x.x` — web app era (Streamlit Community Cloud, current branch `llc_compliance_tool`)
+> `1.x.x` — web app era (Streamlit Community Cloud, deployed from `main`)
 
 ---
 
@@ -148,7 +148,7 @@ pytest -q
 
 1. Push the branch to GitHub.
 2. Go to [share.streamlit.io](https://share.streamlit.io) → **New app**.
-3. Repo: `Emanoid/selleramp_rebuild`, branch: `llc_compliance_tool`, file: `src/sa_rebuild/web/app.py`.
+3. Repo: `Emanoid/selleramp_rebuild`, branch: `main`, file: `src/sa_rebuild/web/app.py`.
 4. Under **Settings → Secrets**, add `KEEPA_API_KEY`.
 5. Click **Deploy**.
 
@@ -347,7 +347,7 @@ Re-running is safe — rows are upserted by deterministic document IDs. Structur
 
 1. Push the branch to GitHub.
 2. Go to [share.streamlit.io](https://share.streamlit.io) → **New app**.
-3. Repo: `Emanoid/selleramp_rebuild`, branch: `llc_compliance_tool`, file: `src/sa_rebuild/web/app.py`.
+3. Repo: `Emanoid/selleramp_rebuild`, branch: `main`, file: `src/sa_rebuild/web/app.py`.
 4. Under **Settings → Secrets**, paste the following (use triple single-quotes for the JSON so `\n` in the private key is preserved):
 
 ```toml
