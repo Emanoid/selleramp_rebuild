@@ -17,16 +17,17 @@ _SRC = _HERE.parents[3]  # .../src  (pages/ is one level deeper than web/)
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from sa_rebuild import __version__, state as state_mod
+from sa_rebuild import __version__
+from sa_rebuild.fba import state as state_mod
 from sa_rebuild.config import AppConfig
-from sa_rebuild.csv_io import COLUMN_DESCRIPTIONS, REPORT_COLUMNS, read_input
+from sa_rebuild.fba.csv_io import COLUMN_DESCRIPTIONS, REPORT_COLUMNS, read_input
 from sa_rebuild.paths import (
     get_keepa_api_key,
     input_dir,
     output_dir,
     set_keepa_api_key,
 )
-from sa_rebuild.runner import iter_process, ProgressEvent
+from sa_rebuild.fba.runner import iter_process, ProgressEvent
 
 
 # ---------------------------------------------------------------------------- helpers

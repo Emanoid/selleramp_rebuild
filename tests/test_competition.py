@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta, timezone
 
-from sa_rebuild.analytics import competition
+from sa_rebuild.fba.analytics import competition
 from sa_rebuild.config import AppConfig
-from sa_rebuild.keepa_data import KEEPA_EPOCH_MINUTES
+from sa_rebuild.fba.keepa_data import KEEPA_EPOCH_MINUTES
 
 
 AMZ = "ATVPDKIKX0DER"

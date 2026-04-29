@@ -1,4 +1,4 @@
-from sa_rebuild.analytics import viability
+from sa_rebuild.fba.analytics import viability
 from sa_rebuild.config import AppConfig
 
 

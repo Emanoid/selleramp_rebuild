@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """
-Seed Firestore from the Excel compliance tracker.
+Seed Firestore from an Excel compliance tracker.
 
 Re-running is safe: rows are upserted via deterministic document IDs derived
 from key fields. New rows in the Excel are added; existing rows are updated
 in place (status, notes, dates are preserved if already changed in the app).
 
 Usage:
-    python scripts/seed_compliance.py path/to/CentralLineGroup_Compliance_Tracker.xlsx
-    python scripts/seed_compliance.py path/to/file.xlsx --dry-run
-    python scripts/seed_compliance.py path/to/file.xlsx --service-account /path/to/sa.json
+    python scripts/seed_compliance.py path/to/tracker.xlsx
+    python scripts/seed_compliance.py path/to/tracker.xlsx --dry-run
+    python scripts/seed_compliance.py path/to/tracker.xlsx --wipe
+    python scripts/seed_compliance.py path/to/tracker.xlsx --service-account /path/to/sa.json
 """
 from __future__ import annotations
 
@@ -59,15 +60,6 @@ def _normalise_status(raw: object) -> str:
     return "Pending"
 
 
-def _assigned_from_notes(notes: object) -> str:
-    n = str(notes or "")
-    if "Kadiatu" in n:
-        return "Kadiatu"
-    if "Emmanuel" in n:
-        return "Emmanuel"
-    return "LLC"
-
-
 # ── sheet readers ─────────────────────────────────────────────────────────────
 
 def _iter_rows(ws, header_row: int):
@@ -90,9 +82,8 @@ def parse_quarterly(ws) -> list[dict]:
             continue
         year = row.get("Year")
         quarter = str(row.get("Quarter") or "").strip()
-        notes_raw = row.get("Notes")
-        assigned_to = _assigned_from_notes(notes_raw)
-        doc_id = _slug("q", year, filing_type, quarter, assigned_to)
+        assigned_to = str(row.get("Assigned To") or "LLC").strip() or "LLC"
+        doc_id = _slug("q", year, filing_type, quarter)
         records.append({
             "_id": doc_id,
             "category": "quarterly",
@@ -106,7 +97,7 @@ def parse_quarterly(ws) -> list[dict]:
             "date_filed": _parse_date(row.get("Date Filed")),
             "confirmation_number": None,
             "assigned_to": assigned_to,
-            "notes": str(notes_raw or "").strip(),
+            "notes": str(row.get("Notes") or "").strip(),
         })
     return records
 
@@ -118,9 +109,8 @@ def parse_annual(ws) -> list[dict]:
         if not filing:
             continue
         year = row.get("Year")
-        notes_raw = row.get("Notes")
-        assigned_to = _assigned_from_notes(notes_raw)
-        doc_id = _slug("a", year, filing, assigned_to)
+        assigned_to = str(row.get("Assigned To") or "LLC").strip() or "LLC"
+        doc_id = _slug("a", year, filing)
         records.append({
             "_id": doc_id,
             "category": "annual",
@@ -134,7 +124,7 @@ def parse_annual(ws) -> list[dict]:
             "date_filed": _parse_date(row.get("Date Filed")),
             "confirmation_number": None,
             "assigned_to": assigned_to,
-            "notes": str(notes_raw or "").strip(),
+            "notes": str(row.get("Notes") or "").strip(),
         })
     return records
 
@@ -145,6 +135,7 @@ def parse_one_time(ws) -> list[dict]:
         item = str(row.get("Item") or "").strip()
         if not item:
             continue
+        assigned_to = str(row.get("Assigned To") or "LLC").strip() or "LLC"
         doc_id = _slug("ot", item)
         conf_raw = row.get("Confirmation #")
         records.append({
@@ -159,7 +150,7 @@ def parse_one_time(ws) -> list[dict]:
             "status": _normalise_status(row.get("Status")),
             "date_filed": _parse_date(row.get("Date Completed")),
             "confirmation_number": str(conf_raw).strip() if conf_raw else None,
-            "assigned_to": "LLC",
+            "assigned_to": assigned_to,
             "notes": str(row.get("Notes") or "").strip(),
         })
     return records
@@ -202,20 +193,11 @@ def upsert_all(db, records: list[dict]) -> tuple[int, int]:
     return added, updated
 
 
-def upsert_members(db, names: set[str]) -> int:
-    """Add any name not already in the members collection. Returns count added."""
-    existing = {d.to_dict().get("name", "") for d in db.collection("members").stream()}
-    to_add = sorted(n for n in names if n and n != "LLC" and n not in existing)
-    for name in to_add:
-        db.collection("members").add({"name": name})
-    return len(to_add)
-
-
 # ── main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Seed Firestore from CentralLineGroup_Compliance_Tracker.xlsx"
+        description="Seed Firestore from a compliance tracker Excel file"
     )
     parser.add_argument("xlsx", help="Path to the Excel tracker file")
     parser.add_argument(
@@ -231,7 +213,7 @@ def main() -> None:
     parser.add_argument(
         "--wipe",
         action="store_true",
-        help="Delete ALL documents in the filings collection before seeding (fixes corruption)",
+        help="Delete ALL documents in the filings collection before seeding",
     )
     args = parser.parse_args()
 
@@ -264,10 +246,7 @@ def main() -> None:
 
     sa_path = Path(args.service_account)
     if not sa_path.exists():
-        sys.exit(
-            f"Service account not found: {sa_path}\n"
-            "See compliance_tool_plan.md → Step 5 for how to generate it."
-        )
+        sys.exit(f"Service account not found: {sa_path}")
 
     try:
         import firebase_admin
@@ -293,15 +272,9 @@ def main() -> None:
                 deleted += 1
         print(f"Deleted {deleted} documents.")
 
-    # Collect assignees before upsert_all mutates the records
-    unique_assignees = {r.get("assigned_to", "") for r in all_records}
-
     print("\nWriting to Firestore…")
     added, updated = upsert_all(db, all_records)
     print(f"Done.  Added: {added}   Updated (structural fields only): {updated}")
-
-    members_added = upsert_members(db, unique_assignees)
-    print(f"Members seeded: {members_added} new name(s) added to the members collection.")
 
 
 if __name__ == "__main__":

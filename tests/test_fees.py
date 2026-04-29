@@ -1,5 +1,5 @@
 """Parity tests for fee math against the user's SellerAmp 'FBA' profile."""
-from sa_rebuild.analytics import fees
+from sa_rebuild.fba.analytics import fees
 from sa_rebuild.config import AppConfig
 
 

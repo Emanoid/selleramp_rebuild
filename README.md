@@ -142,7 +142,7 @@ streamlit run src/sa_rebuild/web/app.py
 pytest -q
 ```
 
-42 offline tests — no API key required. All Keepa responses are mocked.
+43 offline tests — no API key required. All Keepa responses are mocked.
 
 #### Deploying to Streamlit Community Cloud
 
@@ -156,27 +156,31 @@ pytest -q
 
 ```
 src/sa_rebuild/
+├── config.py                   # AppConfig (Pydantic settings) — shared by both tools
+├── paths.py                    # Runtime data dirs (cache, state, output) — shared
 ├── web/
 │   ├── app.py                  # Entry point — navigation wirer
 │   ├── home.py                 # Landing page (two-column tool cards)
 │   └── pages/
 │       └── 1_FBA_Calculator.py # FBA sourcing tool UI
-├── config.py                   # AppConfig (Pydantic settings)
-├── runner.py                   # Per-row Keepa processing + token wait logic
-├── keepa_client.py             # Token-aware Keepa wrapper + 24h on-disk cache
-├── state.py                    # Atomic per-row checkpoints + resume
-├── csv_io.py                   # Input CSV parsing + append-on-row output
-├── keepa_data.py               # Keepa response field extraction helpers
-├── report.py                   # Assembles the final per-UPC output row
-└── analytics/
-    ├── pricing.py              # Recommended sell price rule
-    ├── competition.py          # Dominance scoring (Amazon + brand)
-    ├── sales.py                # Monthly sales + BSR percentile
-    ├── fees.py                 # Referral + FBA + inbound fee tables
-    ├── variations.py           # Sibling / variation viability
-    └── viability.py            # Buy / Caution / Skip label logic
+└── fba/                        # All FBA Calculator source code
+    ├── runner.py               # Per-row Keepa processing + token wait logic
+    ├── keepa_client.py         # Token-aware Keepa wrapper + 24h on-disk cache
+    ├── keepa_data.py           # Keepa response field extraction helpers
+    ├── state.py                # Atomic per-row checkpoints + resume
+    ├── csv_io.py               # Input CSV parsing + append-on-row output
+    ├── report.py               # Assembles the final per-UPC output row
+    ├── cache.py                # SQLite TTL cache
+    ├── token_bucket.py         # Local Keepa token mirror
+    └── analytics/
+        ├── pricing.py          # Recommended sell price rule
+        ├── competition.py      # Dominance scoring (Amazon + brand)
+        ├── sales.py            # Monthly sales + BSR percentile
+        ├── fees.py             # Referral + FBA + inbound fee tables
+        ├── variations.py       # Sibling / variation viability
+        └── viability.py        # Buy / Caution / Skip label logic
 config.yaml                     # Tunable thresholds (ROI, BSR%, seller count, etc.)
-tests/                          # 42 offline tests with mocked Keepa responses
+tests/                          # 43 offline tests — no API key required
 ```
 
 #### Recommended sell price rule
@@ -386,23 +390,25 @@ FIREBASE_SERVICE_ACCOUNT_JSON = '''{"type":"service_account","project_id":"...fu
 
 ```
 src/sa_rebuild/
+├── config.py                   # AppConfig (Pydantic settings) — shared by both tools
+├── paths.py                    # Runtime data dirs — shared
 ├── web/
 │   ├── app.py                  # Entry point — navigation wirer
 │   └── pages/
 │       └── 2_LLC_Compliance.py # All compliance UI — tabs, dialogs, filters, action bar
-├── compliance/
-│   ├── firebase_client.py      # Cached Firestore client (st.cache_resource)
-│   │                           #   reads FIREBASE_SERVICE_ACCOUNT_JSON or local file
-│   ├── auth.py                 # Firebase Auth REST API — email/password sign-in
-│   └── db.py                   # All Firestore CRUD:
-│                               #   get_filings / get_all_filings / get_filing_history
-│                               #   add_filing / update_filing / delete_filing
-│                               #   ensure_order / move_rows (row reordering)
-│                               #   get_members / get_members_with_ids
-│                               #   add_member / delete_member
-│                               #   count_filings_by_assignee / reassign_filings
-│                               #   get_company_info / save_company_info
-│                               #   sync_members_from_filings
+└── compliance/                 # All LLC Compliance Tracker source code
+    ├── firebase_client.py      # Cached Firestore client (st.cache_resource)
+    │                           #   reads FIREBASE_SERVICE_ACCOUNT_JSON or local file
+    ├── auth.py                 # Firebase Auth REST API — email/password sign-in
+    └── db.py                   # All Firestore CRUD:
+                                #   get_filings / get_all_filings / get_filing_history
+                                #   add_filing / update_filing / delete_filing
+                                #   ensure_order / move_rows (row reordering)
+                                #   get_members / get_members_with_ids
+                                #   add_member / delete_member
+                                #   count_filings_by_assignee / reassign_filings
+                                #   get_company_info / save_company_info
+                                #   sync_members_from_filings
 scripts/
 └── seed_compliance.py          # Excel → Firestore (filings + members, idempotent)
 ```
@@ -421,6 +427,6 @@ scripts/
 
 - **Brand dominance is a heuristic.** Fuzzy name matching between the buy-box seller and the product brand is imperfect — always verify manually when the `brand_dominant` flag is set.
 - **Sales estimates are estimates.** Keepa's `monthlySold` reflects Amazon's "X+ bought" badge, not verified sales data.
-- **FBA fee tables drift.** Amazon periodically updates fulfillment fees. Update `analytics/fees.py` when Amazon publishes new rates.
+- **FBA fee tables drift.** Amazon periodically updates fulfillment fees. Update `fba/analytics/fees.py` when Amazon publishes new rates.
 - **No own-inventory awareness.** The calculator doesn't factor in stock you already hold at FBA.
 - **Keepa token budget is shared.** If you run multiple sessions simultaneously, they compete for the same 60-token bucket.
