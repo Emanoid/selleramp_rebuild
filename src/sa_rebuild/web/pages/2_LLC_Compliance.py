@@ -293,12 +293,20 @@ def _delete_modal(rows: list[dict], user_email: str) -> None:
         )
     st.divider()
     confirm, cancel = st.columns(2)
-    if confirm.button("Yes, delete", type="primary", use_container_width=True):
+    if confirm.button("Yes, delete", key="del_confirm", type="primary", use_container_width=True):
         from sa_rebuild.compliance.db import delete_filing
+        failed = []
         for r in rows:
-            delete_filing(r["id"])
-        st.rerun()
-    if cancel.button("Cancel", use_container_width=True):
+            try:
+                delete_filing(r["id"])
+            except Exception as exc:
+                failed.append(f"{r.get('filing_type', r['id'])}: {exc}")
+        if failed:
+            for msg in failed:
+                st.error(f"Delete failed — {msg}")
+        else:
+            st.rerun()
+    if cancel.button("Cancel", key="del_cancel", use_container_width=True):
         st.rerun()
 
 

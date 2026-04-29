@@ -132,5 +132,4 @@ def delete_filing(doc_id: str) -> None:
 
 
 def _invalidate_cache() -> None:
-    get_filings.clear()
-    get_all_filings.cache_clear() if hasattr(get_all_filings, "cache_clear") else None
+    st.cache_data.clear()
