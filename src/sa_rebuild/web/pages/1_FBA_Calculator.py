@@ -67,11 +67,9 @@ def _ensure_session():
     ss.setdefault("started_at", None)
     ss.setdefault("auto_resumed", False)
     ss.setdefault("tracked_run_id", None)
-    # Firestore read caches — avoids re-reading on every 0.5 s rerun
+    # Firestore read cache — avoids re-reading on every 0.5 s rerun
     ss.setdefault("_runs_cache", None)
     ss.setdefault("_runs_cache_ts", 0.0)
-    ss.setdefault("_prior_cache", None)
-    ss.setdefault("_prior_cache_ts", 0.0)
 
 
 def _cached_list_runs() -> list:
@@ -92,18 +90,15 @@ def _cached_list_runs() -> list:
 
 
 def _cached_load_last() -> Optional[cloud_state.RunState]:
-    """Return the most recent run, fetching from Firestore at most once per _PRIOR_TTL_S."""
-    ss = st.session_state
-    now = time.time()
-    if ss._prior_cache_ts and now - ss._prior_cache_ts < _PRIOR_TTL_S:
-        return ss._prior_cache
-    try:
-        run = cloud_state.load_last()
-        ss._prior_cache = run
-        ss._prior_cache_ts = now
-    except Exception:
-        return ss._prior_cache
-    return run
+    """Return the most recent resumable run, derived from the already-cached run list.
+
+    Reuses _cached_list_runs() so no extra Firestore read is needed.
+    """
+    runs = _cached_list_runs()
+    for r in runs:
+        if r.is_resumable and r.remaining_row_ids:
+            return r
+    return runs[0] if runs else None
 
 
 def _rows_from_cloud_state(rs: cloud_state.RunState) -> dict[int, InputRow]:
@@ -616,7 +611,6 @@ else:
                 if ss.tracked_run_id == run.run_id:
                     ss.tracked_run_id = None
                 ss._runs_cache_ts = 0.0
-                ss._prior_cache_ts = 0.0
                 st.toast(f"Deleted {run.run_id}.")
                 st.rerun()
 
@@ -638,7 +632,6 @@ with st.expander("⚠️ Danger zone"):
             ss.tracked_run_id = None
             ss.events = []
             ss._runs_cache_ts = 0.0
-            ss._prior_cache_ts = 0.0
             st.success(f"Deleted {n} documents.")
             st.rerun()
         except Exception as e:
