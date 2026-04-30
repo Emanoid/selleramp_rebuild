@@ -458,7 +458,7 @@ is_foreign_run = tracked and tracked != ss.run_id
 
 _rerun_after_s: Optional[float] = None
 
-if worker_running or ss.events or is_local_run:
+if worker_running or ss.events or tracked:
     st.divider()
     if is_foreign_run:
         st.subheader(f"Tracking run {tracked}")
@@ -468,7 +468,7 @@ if worker_running or ss.events or is_local_run:
 if worker_running or ss.events:
     _rerun_after_s = _render_local_progress(ss.events, worker_running, include_descriptions)
 
-elif is_foreign_run:
+elif tracked:
     try:
         tracked_rs = cloud_state.load(tracked)
         _rerun_after_s = _render_firestore_progress(

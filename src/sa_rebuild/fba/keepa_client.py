@@ -63,27 +63,23 @@ class KeepaClient:
         return self.cfg.keepa.cache_ttl_hours * 3600
 
     def _ensure_tokens(self, expected: int, cancel_check=None) -> float:
-        """Block until enough tokens. Returns seconds slept (0 if no wait).
+        """Raise immediately if tokens insufficient — never sleeps.
 
-        Polls cancel_check every 0.5s during the sleep so the user's Stop
-        button is responsive even when the predicted wait is many minutes.
+        The runner owns all sleeping via _interruptible_wait so it can emit
+        live log events every 30s during token waits. Returns 0.0 if enough
+        tokens are already available.
         """
-        max_wait_s = self.cfg.runtime.max_wait_minutes * 60
-        slept = self.bucket.wait_for(expected, max_wait_seconds=max_wait_s,
-                                     cancel_check=cancel_check)
-        if slept == -1.0:
-            wait_needed = self.bucket.seconds_until(expected)
-            raise TokensExhausted(
-                f"Need {expected} tokens; predicted wait {wait_needed / 60:.0f}m "
-                f"(limit {self.cfg.runtime.max_wait_minutes}m). "
-                f"Have ~{self.bucket.predicted_now()}, refill {self.bucket.refill_rate_per_min}/min. "
-                f"Runner will sleep and retry automatically.",
-                retryable=False,
-                wait_seconds=wait_needed,
-            )
-        if slept == -2.0:
-            raise CancelledByUser("Stopped by user during token wait.")
-        return slept
+        predicted = self.bucket.predicted_now()
+        if predicted >= expected:
+            return 0.0
+        wait_needed = self.bucket.seconds_until(expected)
+        raise TokensExhausted(
+            f"Need {expected} tokens, have ~{predicted} "
+            f"(refill {self.bucket.refill_rate_per_min:.0f}/min). "
+            f"Estimated wait: {wait_needed / 60:.1f}m. Runner sleeping and retrying.",
+            retryable=False,
+            wait_seconds=wait_needed,
+        )
 
     def _query(self, *, items: list[str], product_code_is_asin: bool) -> list[dict]:
         kp_cfg = self.cfg.keepa
