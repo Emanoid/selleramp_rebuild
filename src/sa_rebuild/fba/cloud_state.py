@@ -15,7 +15,7 @@ from ..compliance.firebase_client import get_db
 
 RUNS_COL = "fba_runs"
 OUTPUT_COL = "fba_output"
-_INDEX_DOC = "__index__"   # single doc in fba_runs holding lightweight run summaries
+_INDEX_DOC = "_index"      # single doc in fba_runs holding lightweight run summaries
 _INDEX_MAX = 50            # max entries kept in the index
 _SEP = "__"
 HEARTBEAT_STALE_S = 30   # running run considered orphaned after this many seconds of silence
