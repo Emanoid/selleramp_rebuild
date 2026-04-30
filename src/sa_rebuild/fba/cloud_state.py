@@ -6,7 +6,6 @@ Collections (all prefixed fba_ — wiped cleanly by clear_all_fba_data):
 """
 from __future__ import annotations
 
-import dataclasses
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -138,12 +137,15 @@ def load(run_id: str) -> RunState:
 
 
 def _index_entry_to_run_state(entry: dict) -> RunState:
-    """Inflate a lightweight index entry into a RunState (no input_rows)."""
-    defaults = {f.name: f.default if f.default is not dataclasses.MISSING
-                else f.default_factory()  # type: ignore[misc]
-                for f in dataclasses.fields(RunState)
-                if f.name not in entry}
-    return RunState(**{**defaults, **entry})
+    """Inflate a lightweight index entry into a RunState (no input_rows/csv paths)."""
+    # Fields not stored in the index get safe empty defaults.
+    full = {
+        "input_csv": "", "output_csv": "", "last_updated_at": "",
+        "config_path": "config.yaml", "remaining_row_ids": [],
+        "completed_row_ids": [], "input_rows": [],
+        **entry,
+    }
+    return RunState(**full)
 
 
 def list_all_runs(limit: int = 50) -> List[RunState]:
@@ -197,9 +199,10 @@ def set_status(state: RunState, status: str) -> None:
 
 def write_heartbeat(run_id: str, rows_done: int, tokens_left: int,
                     last_message: str = "") -> None:
-    now = time.time()
+    # Only updates the full run doc — NOT the index. Index is updated on status
+    # changes only (save, set_status, cancel, delete) to avoid 1 read per heartbeat.
     update: Dict[str, Any] = {
-        "last_heartbeat": now,
+        "last_heartbeat": time.time(),
         "rows_done": rows_done,
         "tokens_left_snapshot": tokens_left,
         "status": "running",
@@ -208,7 +211,6 @@ def write_heartbeat(run_id: str, rows_done: int, tokens_left: int,
     if last_message:
         update["last_message"] = last_message
     get_db().collection(RUNS_COL).document(run_id).update(update)
-    _patch_index(run_id, {k: v for k, v in update.items() if k in _INDEX_FIELDS})
 
 
 def is_cancelled(run_id: str) -> bool:
