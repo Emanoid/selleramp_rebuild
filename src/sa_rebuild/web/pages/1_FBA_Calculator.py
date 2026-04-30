@@ -50,11 +50,12 @@ TEMPLATE_CSV = (
 
 # Firestore read throttle — all read paths are rate-limited to stay inside
 # the free-tier 50K reads/day quota.
-_HIST_TTL_S = 60.0      # run history list refresh interval
-_PRIOR_TTL_S = 60.0     # load_last refresh interval
-_FS_POLL_S   = 30.0     # Firestore-progress rerun interval
+# list_all_runs() now reads 1 index doc instead of N run docs, so TTL can be
+# shorter without burning quota.
+_HIST_TTL_S    = 30.0   # run history refresh interval (1 read per miss, not 10)
+_FS_POLL_S     = 30.0   # Firestore-progress rerun interval
 _CANCEL_POLL_S = 60.0   # cancel-monitor poll interval
-_HIST_LIMIT  = 10       # max runs fetched per history query (10 reads × 1440/day = 14 400/day)
+_HIST_LIMIT    = 20     # entries shown from the index (no cost increase vs 5)
 
 
 def _ensure_session():
