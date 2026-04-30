@@ -6,6 +6,7 @@ Collections (all prefixed fba_ — wiped cleanly by clear_all_fba_data):
 """
 from __future__ import annotations
 
+import dataclasses
 import time
 import uuid
 from dataclasses import asdict, dataclass, field
@@ -15,8 +16,16 @@ from ..compliance.firebase_client import get_db
 
 RUNS_COL = "fba_runs"
 OUTPUT_COL = "fba_output"
+_INDEX_DOC = "__index__"   # single doc in fba_runs holding lightweight run summaries
+_INDEX_MAX = 50            # max entries kept in the index
 _SEP = "__"
-HEARTBEAT_STALE_S = 30  # run considered orphaned after this many seconds of silence
+HEARTBEAT_STALE_S = 30   # running run considered orphaned after this many seconds of silence
+_PENDING_STALE_S  = 120  # pending run with no heartbeat considered orphaned after this
+
+# Fields stored in the index entry — small, no input_rows
+_INDEX_FIELDS = ("run_id", "status", "rows_done", "rows_total",
+                 "started_at", "last_heartbeat", "last_message",
+                 "tokens_left_snapshot", "errors")
 
 
 @dataclass
@@ -35,6 +44,7 @@ class RunState:
     config_path: str = "config.yaml"
     status: str = "pending"
     last_heartbeat: float = 0.0
+    last_message: str = ""
     input_rows: List[Dict[str, Any]] = field(default_factory=list)
 
     @classmethod
@@ -64,22 +74,55 @@ class RunState:
 
     @property
     def is_orphaned(self) -> bool:
-        """Marked running but heartbeat is stale — server restarted mid-run."""
-        return (
-            self.status == "running"
-            and self.last_heartbeat > 0
-            and (time.time() - self.last_heartbeat) > HEARTBEAT_STALE_S
-        )
+        """Worker crashed or server restarted — run needs recovery."""
+        if self.status == "running":
+            return (
+                self.last_heartbeat > 0
+                and (time.time() - self.last_heartbeat) > HEARTBEAT_STALE_S
+            )
+        if self.status == "pending":
+            # Worker crashed before first heartbeat — detect by run age
+            try:
+                from datetime import datetime
+                age_s = (datetime.now() - datetime.fromisoformat(self.started_at)).total_seconds()
+                return age_s > _PENDING_STALE_S
+            except Exception:
+                return True
+        return False
 
     @property
     def is_resumable(self) -> bool:
         return self.status == "paused" or self.is_orphaned
 
 
+def _index_entry(state: RunState) -> dict:
+    return {k: getattr(state, k) for k in _INDEX_FIELDS}
+
+
+def _update_index(state: RunState) -> None:
+    """Upsert this run's summary into the single index document (1 write)."""
+    db = get_db()
+    ref = db.collection(RUNS_COL).document(_INDEX_DOC)
+    doc = ref.get()
+    entries: list = doc.to_dict().get("runs", []) if doc.exists else []
+    # Replace existing entry or prepend
+    entries = [e for e in entries if e.get("run_id") != state.run_id]
+    entries.insert(0, _index_entry(state))
+    entries = entries[:_INDEX_MAX]
+    ref.set({"runs": entries})
+
+
+def _read_index() -> List[dict]:
+    """Read the index document (1 Firestore read). Returns list of run summaries."""
+    doc = get_db().collection(RUNS_COL).document(_INDEX_DOC).get()
+    return doc.to_dict().get("runs", []) if doc.exists else []
+
+
 def save(state: RunState) -> None:
     """Full document write — used for new runs and initial state creation."""
     state.last_updated_at = time.strftime("%Y-%m-%dT%H:%M:%S")
     get_db().collection(RUNS_COL).document(state.run_id).set(asdict(state))
+    _update_index(state)
 
 
 def _partial_update(run_id: str, fields: dict) -> None:
@@ -94,23 +137,19 @@ def load(run_id: str) -> RunState:
     return RunState(**doc.to_dict())
 
 
+def _index_entry_to_run_state(entry: dict) -> RunState:
+    """Inflate a lightweight index entry into a RunState (no input_rows)."""
+    defaults = {f.name: f.default if f.default is not dataclasses.MISSING
+                else f.default_factory()  # type: ignore[misc]
+                for f in dataclasses.fields(RunState)
+                if f.name not in entry}
+    return RunState(**{**defaults, **entry})
+
+
 def list_all_runs(limit: int = 50) -> List[RunState]:
-    docs = (
-        get_db().collection(RUNS_COL)
-        .order_by("started_at", direction="DESCENDING")
-        .limit(limit)
-        .stream()
-    )
-    return [RunState(**d.to_dict()) for d in docs]
-
-
-def load_last() -> Optional[RunState]:
-    """Return the most recent resumable run, or the most recent run overall."""
-    runs = list_all_runs(limit=20)
-    for r in runs:
-        if r.is_resumable and r.remaining_row_ids:
-            return r
-    return runs[0] if runs else None
+    """Return recent runs from the index document — costs 1 Firestore read."""
+    entries = _read_index()
+    return [_index_entry_to_run_state(e) for e in entries[:limit]]
 
 
 def mark_done(state: RunState, row_id: int, tokens_left: int) -> None:
@@ -135,19 +174,41 @@ def mark_error(state: RunState, row_id: int, upc: str, stage: str, message: str)
     _partial_update(state.run_id, {"errors": state.errors})
 
 
+def _patch_index(run_id: str, fields: dict) -> None:
+    """Update specific fields for one run inside the index document (1 read + 1 write)."""
+    db = get_db()
+    ref = db.collection(RUNS_COL).document(_INDEX_DOC)
+    doc = ref.get()
+    if not doc.exists:
+        return
+    entries = doc.to_dict().get("runs", [])
+    for e in entries:
+        if e.get("run_id") == run_id:
+            e.update(fields)
+            break
+    ref.set({"runs": entries})
+
+
 def set_status(state: RunState, status: str) -> None:
     state.status = status
     _partial_update(state.run_id, {"status": status})
+    _patch_index(state.run_id, {"status": status})
 
 
-def write_heartbeat(run_id: str, rows_done: int, tokens_left: int) -> None:
-    get_db().collection(RUNS_COL).document(run_id).update({
-        "last_heartbeat": time.time(),
+def write_heartbeat(run_id: str, rows_done: int, tokens_left: int,
+                    last_message: str = "") -> None:
+    now = time.time()
+    update: Dict[str, Any] = {
+        "last_heartbeat": now,
         "rows_done": rows_done,
         "tokens_left_snapshot": tokens_left,
         "status": "running",
         "last_updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-    })
+    }
+    if last_message:
+        update["last_message"] = last_message
+    get_db().collection(RUNS_COL).document(run_id).update(update)
+    _patch_index(run_id, {k: v for k, v in update.items() if k in _INDEX_FIELDS})
 
 
 def is_cancelled(run_id: str) -> bool:
@@ -157,6 +218,7 @@ def is_cancelled(run_id: str) -> bool:
 
 def cancel_run(run_id: str) -> None:
     get_db().collection(RUNS_COL).document(run_id).update({"status": "cancelled"})
+    _patch_index(run_id, {"status": "cancelled"})
 
 
 def delete_run(run_id: str) -> None:
@@ -164,6 +226,12 @@ def delete_run(run_id: str) -> None:
     db.collection(RUNS_COL).document(run_id).delete()
     for doc in db.collection(OUTPUT_COL).where("run_id", "==", run_id).stream():
         doc.reference.delete()
+    # Remove from index
+    ref = db.collection(RUNS_COL).document(_INDEX_DOC)
+    idx = ref.get()
+    if idx.exists:
+        entries = [e for e in idx.to_dict().get("runs", []) if e.get("run_id") != run_id]
+        ref.set({"runs": entries})
 
 
 def save_output_row(run_id: str, row_id: int, row: Dict[str, Any]) -> None:

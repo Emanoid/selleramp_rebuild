@@ -50,11 +50,12 @@ TEMPLATE_CSV = (
 
 # Firestore read throttle — all read paths are rate-limited to stay inside
 # the free-tier 50K reads/day quota.
-_HIST_TTL_S = 60.0      # run history list refresh interval
-_PRIOR_TTL_S = 60.0     # load_last refresh interval
-_FS_POLL_S   = 30.0     # Firestore-progress rerun interval
+# list_all_runs() now reads 1 index doc instead of N run docs, so TTL can be
+# shorter without burning quota.
+_HIST_TTL_S    = 30.0   # run history refresh interval (1 read per miss, not 10)
+_FS_POLL_S     = 30.0   # Firestore-progress rerun interval
 _CANCEL_POLL_S = 60.0   # cancel-monitor poll interval
-_HIST_LIMIT  = 10       # max runs fetched per history query (10 reads × 1440/day = 14 400/day)
+_HIST_LIMIT    = 20     # entries shown from the index (no cost increase vs 5)
 
 
 def _ensure_session():
@@ -67,11 +68,9 @@ def _ensure_session():
     ss.setdefault("started_at", None)
     ss.setdefault("auto_resumed", False)
     ss.setdefault("tracked_run_id", None)
-    # Firestore read caches — avoids re-reading on every 0.5 s rerun
+    # Firestore read cache — avoids re-reading on every 0.5 s rerun
     ss.setdefault("_runs_cache", None)
     ss.setdefault("_runs_cache_ts", 0.0)
-    ss.setdefault("_prior_cache", None)
-    ss.setdefault("_prior_cache_ts", 0.0)
 
 
 def _cached_list_runs() -> list:
@@ -92,18 +91,15 @@ def _cached_list_runs() -> list:
 
 
 def _cached_load_last() -> Optional[cloud_state.RunState]:
-    """Return the most recent run, fetching from Firestore at most once per _PRIOR_TTL_S."""
-    ss = st.session_state
-    now = time.time()
-    if ss._prior_cache_ts and now - ss._prior_cache_ts < _PRIOR_TTL_S:
-        return ss._prior_cache
-    try:
-        run = cloud_state.load_last()
-        ss._prior_cache = run
-        ss._prior_cache_ts = now
-    except Exception:
-        return ss._prior_cache
-    return run
+    """Return the most recent resumable run, derived from the already-cached run list.
+
+    Reuses _cached_list_runs() so no extra Firestore read is needed.
+    """
+    runs = _cached_list_runs()
+    for r in runs:
+        if r.is_resumable and r.remaining_row_ids:
+            return r
+    return runs[0] if runs else None
 
 
 def _rows_from_cloud_state(rs: cloud_state.RunState) -> dict[int, InputRow]:
@@ -354,10 +350,14 @@ def _render_firestore_progress(rs: cloud_state.RunState, include_descriptions: b
     pct = (rs.rows_done / rs.rows_total) if rs.rows_total else 0.0
     st.progress(pct, text=f"{int(pct * 100)}% — {rs.rows_done}/{rs.rows_total} rows done")
 
-    c = st.columns(3)
+    c = st.columns(4)
     c[0].metric("Rows done", f"{rs.rows_done}/{rs.rows_total}")
     c[1].metric("Rows remaining", len(rs.remaining_row_ids))
-    c[2].metric("Errors", len(rs.errors))
+    c[2].metric("Tokens (snapshot)", f"{rs.tokens_left_snapshot}/60")
+    c[3].metric("Errors", len(rs.errors))
+
+    if rs.last_message:
+        st.info(f"Last activity: {rs.last_message}")
 
     if rs.errors:
         with st.expander(f"Errors ({len(rs.errors)})"):
@@ -612,7 +612,6 @@ else:
                 if ss.tracked_run_id == run.run_id:
                     ss.tracked_run_id = None
                 ss._runs_cache_ts = 0.0
-                ss._prior_cache_ts = 0.0
                 st.toast(f"Deleted {run.run_id}.")
                 st.rerun()
 
@@ -634,7 +633,6 @@ with st.expander("⚠️ Danger zone"):
             ss.tracked_run_id = None
             ss.events = []
             ss._runs_cache_ts = 0.0
-            ss._prior_cache_ts = 0.0
             st.success(f"Deleted {n} documents.")
             st.rerun()
         except Exception as e:
