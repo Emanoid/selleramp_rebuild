@@ -152,11 +152,13 @@ def iter_process(
     )
     _last_heartbeat_t = 0.0
 
+    _last_message = ""
+
     try:
         with writer_ctx as writer:
-            yield _ev("start",
-                      f"▶ Run {rs.run_id} started — "
-                      f"{rs.rows_total - rs.rows_done} rows to process")
+            sm.set_status(rs, "running")
+            _last_message = f"▶ Run {rs.run_id} started — {rs.rows_total - rs.rows_done} rows to process"
+            yield _ev("start", _last_message)
             remaining = list(rs.remaining_row_ids)
             already_done = set(rs.completed_row_ids)
 
@@ -313,12 +315,6 @@ def iter_process(
 
                 sm.mark_done(rs, row_id, client.tokens_left())
 
-                # ── heartbeat ─────────────────────────────────────────────────
-                now = time.time()
-                if now - _last_heartbeat_t >= _HEARTBEAT_INTERVAL_S and hasattr(sm, "write_heartbeat"):
-                    sm.write_heartbeat(rs.run_id, rs.rows_done, client.tokens_left())
-                    _last_heartbeat_t = now
-
                 row_seconds = time.time() - row_t0
                 cache_hit = client.last_was_cache_hit
                 tokens_used = client.last_tokens_consumed
@@ -326,13 +322,21 @@ def iter_process(
                 src = "💾 cache" if cache_hit else f"🌐 Keepa ({tokens_used}t)"
                 wait_str = f" ⏳{_fmt_s(waited)} wait" if waited > 1 else ""
                 verdict = row.get("viability_label", "—")
-                msg = (
+                _last_message = (
                     f"✅ row#{row_id} {fetch_kind}={key} → {verdict} "
                     f"[{src}{wait_str} ⏱{row_seconds:.1f}s] "
                     f"profit=${row.get('estimated_profit', '—')} "
                     f"roi={row.get('roi_pct', '—')}%"
                 )
-                yield _ev("row_done", msg, last_row=row,
+
+                # ── heartbeat ─────────────────────────────────────────────────
+                now = time.time()
+                if now - _last_heartbeat_t >= _HEARTBEAT_INTERVAL_S and hasattr(sm, "write_heartbeat"):
+                    sm.write_heartbeat(rs.run_id, rs.rows_done, client.tokens_left(),
+                                       last_message=_last_message)
+                    _last_heartbeat_t = now
+
+                yield _ev("row_done", _last_message, last_row=row,
                           cache_hit=cache_hit, tokens_consumed=tokens_used,
                           wait_seconds=waited, row_seconds=row_seconds)
                 time.sleep(0.05)

@@ -16,7 +16,8 @@ from ..compliance.firebase_client import get_db
 RUNS_COL = "fba_runs"
 OUTPUT_COL = "fba_output"
 _SEP = "__"
-HEARTBEAT_STALE_S = 30  # run considered orphaned after this many seconds of silence
+HEARTBEAT_STALE_S = 30   # running run considered orphaned after this many seconds of silence
+_PENDING_STALE_S  = 120  # pending run with no heartbeat considered orphaned after this
 
 
 @dataclass
@@ -35,6 +36,7 @@ class RunState:
     config_path: str = "config.yaml"
     status: str = "pending"
     last_heartbeat: float = 0.0
+    last_message: str = ""
     input_rows: List[Dict[str, Any]] = field(default_factory=list)
 
     @classmethod
@@ -64,12 +66,21 @@ class RunState:
 
     @property
     def is_orphaned(self) -> bool:
-        """Marked running but heartbeat is stale — server restarted mid-run."""
-        return (
-            self.status == "running"
-            and self.last_heartbeat > 0
-            and (time.time() - self.last_heartbeat) > HEARTBEAT_STALE_S
-        )
+        """Worker crashed or server restarted — run needs recovery."""
+        if self.status == "running":
+            return (
+                self.last_heartbeat > 0
+                and (time.time() - self.last_heartbeat) > HEARTBEAT_STALE_S
+            )
+        if self.status == "pending":
+            # Worker crashed before first heartbeat — detect by run age
+            try:
+                from datetime import datetime
+                age_s = (datetime.now() - datetime.fromisoformat(self.started_at)).total_seconds()
+                return age_s > _PENDING_STALE_S
+            except Exception:
+                return True
+        return False
 
     @property
     def is_resumable(self) -> bool:
@@ -140,14 +151,18 @@ def set_status(state: RunState, status: str) -> None:
     _partial_update(state.run_id, {"status": status})
 
 
-def write_heartbeat(run_id: str, rows_done: int, tokens_left: int) -> None:
-    get_db().collection(RUNS_COL).document(run_id).update({
+def write_heartbeat(run_id: str, rows_done: int, tokens_left: int,
+                    last_message: str = "") -> None:
+    update: Dict[str, Any] = {
         "last_heartbeat": time.time(),
         "rows_done": rows_done,
         "tokens_left_snapshot": tokens_left,
         "status": "running",
         "last_updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-    })
+    }
+    if last_message:
+        update["last_message"] = last_message
+    get_db().collection(RUNS_COL).document(run_id).update(update)
 
 
 def is_cancelled(run_id: str) -> bool:

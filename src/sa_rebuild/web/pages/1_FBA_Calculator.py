@@ -354,10 +354,14 @@ def _render_firestore_progress(rs: cloud_state.RunState, include_descriptions: b
     pct = (rs.rows_done / rs.rows_total) if rs.rows_total else 0.0
     st.progress(pct, text=f"{int(pct * 100)}% — {rs.rows_done}/{rs.rows_total} rows done")
 
-    c = st.columns(3)
+    c = st.columns(4)
     c[0].metric("Rows done", f"{rs.rows_done}/{rs.rows_total}")
     c[1].metric("Rows remaining", len(rs.remaining_row_ids))
-    c[2].metric("Errors", len(rs.errors))
+    c[2].metric("Tokens (snapshot)", f"{rs.tokens_left_snapshot}/60")
+    c[3].metric("Errors", len(rs.errors))
+
+    if rs.last_message:
+        st.info(f"Last activity: {rs.last_message}")
 
     if rs.errors:
         with st.expander(f"Errors ({len(rs.errors)})"):
