@@ -30,14 +30,14 @@ st.subheader("Available tools")
 col1, col2 = st.columns(2, gap="large")
 
 with col1:
-    st.markdown("#### 🧮 FBA Calculator")
+    st.markdown("#### 🧮 Keepa Search Tool")
     st.markdown(
         "Upload a CSV of UPCs or ASINs with your wholesale cost. "
         "Get a per-row **Buy / Caution / Skip** verdict — recommended sell price, "
         "fees, ROI, monthly sales, competition analysis, and a direct storefront link. "
         "Powered by your Keepa Pro key. Picks up where it left off if interrupted."
     )
-    st.info("Select **FBA Calculator** in the sidebar to open this tool.")
+    st.info("Select **Keepa Search Tool** in the sidebar to open this tool.")
 
 with col2:
     st.markdown("#### 📋 LLC Compliance Tracker")

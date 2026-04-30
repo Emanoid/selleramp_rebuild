@@ -12,7 +12,7 @@ Internal tools for Central Line Group LLC — Amazon FBA sourcing and business c
 
 ## Table of Contents
 
-- [FBA Calculator](#-fba-calculator)
+- [Keepa Search Tool](#-fba-calculator)
   - [What it does](#what-it-does)
   - [For users](#for-users)
   - [For developers](#for-developers)
@@ -28,7 +28,7 @@ Internal tools for Central Line Group LLC — Amazon FBA sourcing and business c
 
 ---
 
-## 🧮 FBA Calculator
+## 🧮 Keepa Search Tool
 
 ### What it does
 
@@ -60,7 +60,7 @@ Download the template inside the app using the **"Download CSV template"** butto
 
 #### Step 3 — Run an analysis
 
-1. Open the app and select **FBA Calculator** in the sidebar.
+1. Open the app and select **Keepa Search Tool** in the sidebar.
 2. Paste your Keepa API key into the **"Keepa API key"** box in the left sidebar.
 3. Upload your CSV and click **Start run**.
 4. Watch live progress — results appear row by row. Each row takes roughly 7–8 minutes at steady state because Keepa limits how fast data can be fetched (see [Token reality](#token-reality) below).
@@ -158,7 +158,7 @@ FIREBASE_WEB_API_KEY=your-web-api-key-here
 
 `SA_REBUILD_HOME` optionally overrides the local data folder (cache, state, output). Default: `~/.sa-rebuild/`.
 
-The FBA Calculator uses Firestore (via the same Firebase project as the LLC tool) to persist run state and output rows across Streamlit server restarts. Locally, if Firebase is configured it uses Firestore; the CLI (`sa-rebuild run`) uses disk state regardless.
+The Keepa Search Tool uses Firestore (via the same Firebase project as the LLC tool) to persist run state and output rows across Streamlit server restarts. Locally, if Firebase is configured it uses Firestore; the CLI (`sa-rebuild run`) uses disk state regardless.
 
 #### Running locally
 
@@ -191,9 +191,9 @@ FIREBASE_SERVICE_ACCOUNT_JSON = '''{"type":"service_account",...full minified JS
 
 > Minify the service account JSON: `python -c "import json,sys; print(json.dumps(json.load(open('service_account.json'))))"`.
 
-The FBA Calculator stores all run state and output rows in Firestore (`fba_runs` and `fba_output` collections), so data survives Streamlit server restarts. The Run History panel and Clear History button in the UI manage these collections directly.
+The Keepa Search Tool stores all run state and output rows in Firestore (`fba_runs` and `fba_output` collections), so data survives Streamlit server restarts. The Run History panel and Clear History button in the UI manage these collections directly.
 
-#### Code layout — FBA Calculator
+#### Code layout — Keepa Search Tool
 
 ```
 src/sa_rebuild/
@@ -203,8 +203,8 @@ src/sa_rebuild/
 │   ├── app.py                  # Entry point — navigation wirer
 │   ├── home.py                 # Landing page (two-column tool cards)
 │   └── pages/
-│       └── 1_FBA_Calculator.py # FBA sourcing tool UI
-└── fba/                        # All FBA Calculator source code
+│       └── 1_Keepa_Search_Tool.py # Keepa sourcing tool UI
+└── fba/                        # All Keepa Search Tool source code
     ├── runner.py               # Per-row Keepa processing + token wait + retry logic
     ├── keepa_client.py         # Token-aware Keepa wrapper + 24h cache + drift retry
     ├── keepa_data.py           # Keepa response field extraction helpers
@@ -430,7 +430,7 @@ FIREBASE_SERVICE_ACCOUNT_JSON = '''{"type":"service_account","project_id":"...fu
 | `members` | `name` — one doc per assignable person |
 | `config/company` | `name`, `formed` — single document |
 
-**FBA Calculator:**
+**Keepa Search Tool:**
 
 | Collection | Document shape |
 |---|---|
@@ -476,7 +476,7 @@ scripts/
 
 ---
 
-## FBA Calculator — Full Behavior Reference
+## Keepa Search Tool — Full Behavior Reference
 
 ### Run lifecycle
 
@@ -602,9 +602,9 @@ A: Scroll to **Danger Zone** at the bottom of the page and click **Clear all FBA
 
 ### What it does
 
-Upload your wholesale cost list and a Keepa Product Viewer export — no API key needed. The tool matches each product by UPC or ASIN, computes the recommended sell price, ROI, profit, and fee breakdown using the same logic as the FBA Calculator, and outputs a single comparison CSV with every Keepa price column, price-minus-cost diffs, and fee breakdowns side-by-side with your cost.
+Upload your wholesale cost list and a Keepa Product Viewer export — no API key needed. The tool matches each product by UPC or ASIN, computes the recommended sell price, ROI, profit, and fee breakdown using the same logic as the Keepa Search Tool, and outputs a single comparison CSV with every Keepa price column, price-minus-cost diffs, and fee breakdowns side-by-side with your cost.
 
-**Key differences from the FBA Calculator:**
+**Key differences from the Keepa Search Tool:**
 - No API key or internet connection needed at run time — works entirely from a Keepa export file you download yourself.
 - Instant results — no token waits, no background worker.
 - Multiple ASINs per UPC: if one barcode maps to several Amazon listings, each becomes its own output row (sorted by how closely the product weight matches your input).
