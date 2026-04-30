@@ -16,7 +16,16 @@ log = logging.getLogger("sa_rebuild")
 
 
 class TokensExhausted(Exception):
-    """Raised when predicted wait exceeds runtime.max_wait_minutes — caller checkpoints and exits."""
+    """Raised when the token wait strategy requires caller intervention.
+
+    retryable=True  → NOT_ENOUGH_TOKEN drift; runner should back off and retry.
+    retryable=False → predicted wait exceeds max_wait_minutes; runner should
+                      sleep wait_seconds then retry (never pause the whole run).
+    """
+    def __init__(self, msg: str, retryable: bool = False, wait_seconds: float = 0.0):
+        super().__init__(msg)
+        self.retryable = retryable
+        self.wait_seconds = wait_seconds  # populated for the limit-exceeded case
 
 
 class CancelledByUser(Exception):
@@ -63,9 +72,14 @@ class KeepaClient:
         slept = self.bucket.wait_for(expected, max_wait_seconds=max_wait_s,
                                      cancel_check=cancel_check)
         if slept == -1.0:
+            wait_needed = self.bucket.seconds_until(expected)
             raise TokensExhausted(
-                f"Need {expected} tokens; predicted wait > {self.cfg.runtime.max_wait_minutes}m. "
-                f"Currently ~{self.bucket.predicted_now()} tokens, refill {self.bucket.refill_rate_per_min}/min."
+                f"Need {expected} tokens; predicted wait {wait_needed / 60:.0f}m "
+                f"(limit {self.cfg.runtime.max_wait_minutes}m). "
+                f"Have ~{self.bucket.predicted_now()}, refill {self.bucket.refill_rate_per_min}/min. "
+                f"Runner will sleep and retry automatically.",
+                retryable=False,
+                wait_seconds=wait_needed,
             )
         if slept == -2.0:
             raise CancelledByUser("Stopped by user during token wait.")
@@ -122,9 +136,10 @@ class KeepaClient:
             # token-exhaustion exception so the runner pauses (and resumes
             # retrying this row) instead of treating it as a row-level fatal.
             if "NOT_ENOUGH_TOKEN" in str(e):
+                self.bucket.update(0)  # force-reset local mirror so next wait is accurate
                 raise TokensExhausted(
-                    f"Keepa reported NOT_ENOUGH_TOKEN. Local mirror says "
-                    f"{self.bucket.predicted_now()} tokens; will retry on resume."
+                    f"Keepa reported NOT_ENOUGH_TOKEN — local mirror reset to 0, will retry.",
+                    retryable=True,
                 ) from e
             raise
         self.last_fetch_seconds = time.time() - t0
@@ -153,9 +168,10 @@ class KeepaClient:
             results = self._query(items=[asin], product_code_is_asin=True)
         except Exception as e:
             if "NOT_ENOUGH_TOKEN" in str(e):
+                self.bucket.update(0)
                 raise TokensExhausted(
-                    f"Keepa reported NOT_ENOUGH_TOKEN. Local mirror says "
-                    f"{self.bucket.predicted_now()} tokens; will retry on resume."
+                    f"Keepa reported NOT_ENOUGH_TOKEN — local mirror reset to 0, will retry.",
+                    retryable=True,
                 ) from e
             raise
         self.last_fetch_seconds = time.time() - t0

@@ -51,6 +51,15 @@ def get_db():
     return firestore.client()
 
 
+def firebase_backend_configured() -> bool:
+    """True if the Admin SDK service account is available (enough for Firestore)."""
+    return bool(
+        os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+        or os.getenv("FIREBASE_SERVICE_ACCOUNT_B64")
+        or Path(os.getenv("FIREBASE_SERVICE_ACCOUNT", "service_account.json")).exists()
+    )
+
+
 def firebase_configured() -> bool:
     """Return True if enough env vars are present to attempt a connection."""
     has_sa = bool(
