@@ -48,6 +48,15 @@ TEMPLATE_CSV = (
 )
 
 
+# Firestore read throttle — all read paths are rate-limited to stay inside
+# the free-tier 50K reads/day quota.
+_HIST_TTL_S = 60.0      # run history list refresh interval
+_PRIOR_TTL_S = 60.0     # load_last refresh interval
+_FS_POLL_S   = 30.0     # Firestore-progress rerun interval
+_CANCEL_POLL_S = 60.0   # cancel-monitor poll interval
+_HIST_LIMIT  = 10       # max runs fetched per history query (10 reads × 1440/day = 14 400/day)
+
+
 def _ensure_session():
     ss = st.session_state
     ss.setdefault("worker_thread", None)
@@ -57,7 +66,44 @@ def _ensure_session():
     ss.setdefault("run_id", None)
     ss.setdefault("started_at", None)
     ss.setdefault("auto_resumed", False)
-    ss.setdefault("tracked_run_id", None)  # run attached from history panel
+    ss.setdefault("tracked_run_id", None)
+    # Firestore read caches — avoids re-reading on every 0.5 s rerun
+    ss.setdefault("_runs_cache", None)
+    ss.setdefault("_runs_cache_ts", 0.0)
+    ss.setdefault("_prior_cache", None)
+    ss.setdefault("_prior_cache_ts", 0.0)
+
+
+def _cached_list_runs() -> list:
+    """Return run history, fetching from Firestore at most once per _HIST_TTL_S."""
+    ss = st.session_state
+    now = time.time()
+    if ss._runs_cache is not None and now - ss._runs_cache_ts < _HIST_TTL_S:
+        return ss._runs_cache
+    try:
+        runs = cloud_state.list_all_runs(limit=_HIST_LIMIT)
+        ss._runs_cache = runs
+        ss._runs_cache_ts = now
+    except Exception:
+        if ss._runs_cache is not None:
+            return ss._runs_cache
+        raise
+    return ss._runs_cache
+
+
+def _cached_load_last() -> Optional[cloud_state.RunState]:
+    """Return the most recent run, fetching from Firestore at most once per _PRIOR_TTL_S."""
+    ss = st.session_state
+    now = time.time()
+    if ss._prior_cache_ts and now - ss._prior_cache_ts < _PRIOR_TTL_S:
+        return ss._prior_cache
+    try:
+        run = cloud_state.load_last()
+        ss._prior_cache = run
+        ss._prior_cache_ts = now
+    except Exception:
+        return ss._prior_cache
+    return run
 
 
 def _rows_from_cloud_state(rs: cloud_state.RunState) -> dict[int, InputRow]:
@@ -67,7 +113,7 @@ def _rows_from_cloud_state(rs: cloud_state.RunState) -> dict[int, InputRow]:
 def _start_cancel_monitor(run_id: str, cancel_event: threading.Event) -> threading.Thread:
     def _monitor():
         while not cancel_event.is_set():
-            time.sleep(5)
+            time.sleep(_CANCEL_POLL_S)
             try:
                 if cloud_state.is_cancelled(run_id):
                     cancel_event.set()
@@ -343,7 +389,7 @@ def _render_firestore_progress(rs: cloud_state.RunState, include_descriptions: b
     if rs.rows_done > 0:
         _show_dataframe_preview(rs.run_id)
 
-    return 3.0 if rs.status == "running" else None
+    return _FS_POLL_S if rs.status == "running" else None
 
 
 # ──────────────────────────────────────────── page
@@ -383,7 +429,7 @@ worker_running = ss.worker_thread is not None and ss.worker_thread.is_alive()
 
 if not worker_running and not ss.auto_resumed:
     try:
-        prior = cloud_state.load_last()
+        prior = _cached_load_last()
         if prior and prior.is_orphaned and prior.remaining_row_ids:
             ss.auto_resumed = True
             stale_min = int((time.time() - prior.last_heartbeat) / 60) if prior.last_heartbeat else "?"
@@ -420,7 +466,7 @@ with right:
 
 # resume banner (manual pause, not orphaned)
 try:
-    prior = cloud_state.load_last()
+    prior = _cached_load_last()
 except Exception:
     prior = None
 
@@ -471,6 +517,8 @@ if worker_running or ss.events:
 elif tracked:
     try:
         tracked_rs = cloud_state.load(tracked)
+        # Invalidate the runs-list cache so the history row reflects new status.
+        ss._runs_cache_ts = 0.0
         _rerun_after_s = _render_firestore_progress(
             tracked_rs, include_descriptions, variations, cfg
         )
@@ -496,7 +544,7 @@ _STATUS_HELP = {
 }
 
 try:
-    all_runs = cloud_state.list_all_runs(limit=50)
+    all_runs = _cached_list_runs()
 except Exception as _e:
     all_runs = []
     st.warning(f"Could not load run history: {_e}")
@@ -522,10 +570,12 @@ else:
                 if action_cols[0].button("🔍 Track", key=f"track_{run.run_id}",
                                          help="Watch this run's live progress from this browser."):
                     ss.tracked_run_id = run.run_id
+                    ss._runs_cache_ts = 0.0
                     st.rerun()
             else:
                 if action_cols[0].button("✕ Untrack", key=f"untrack_{run.run_id}"):
                     ss.tracked_run_id = None
+                    ss._runs_cache_ts = 0.0
                     st.rerun()
 
             # Download
@@ -549,6 +599,7 @@ else:
             if run.status in ("running", "pending"):
                 if action_cols[2].button("⏹ Terminate", key=f"hist_term_{run.run_id}"):
                     cloud_state.cancel_run(run.run_id)
+                    ss._runs_cache_ts = 0.0
                     st.toast(f"Cancellation sent to {run.run_id}.")
                     st.rerun()
 
@@ -560,6 +611,8 @@ else:
                     ss.events = []
                 if ss.tracked_run_id == run.run_id:
                     ss.tracked_run_id = None
+                ss._runs_cache_ts = 0.0
+                ss._prior_cache_ts = 0.0
                 st.toast(f"Deleted {run.run_id}.")
                 st.rerun()
 
@@ -580,6 +633,8 @@ with st.expander("⚠️ Danger zone"):
             ss.run_id = None
             ss.tracked_run_id = None
             ss.events = []
+            ss._runs_cache_ts = 0.0
+            ss._prior_cache_ts = 0.0
             st.success(f"Deleted {n} documents.")
             st.rerun()
         except Exception as e:
