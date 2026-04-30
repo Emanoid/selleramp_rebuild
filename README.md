@@ -20,6 +20,10 @@ Internal tools for Central Line Group LLC — Amazon FBA sourcing and business c
   - [What it does](#what-it-does-1)
   - [For users](#for-users-1)
   - [For developers](#for-developers-1)
+- [Keepa SellerAmp Compare](#-keepa-selleramp-compare)
+  - [What it does](#what-it-does-2)
+  - [For users](#for-users-2)
+  - [For developers](#for-developers-2)
 - [Known Limitations](#known-limitations)
 
 ---
@@ -589,6 +593,219 @@ A: At 1 token/min refill and ~8 tokens/row, you process roughly 1 row every 8 mi
 
 **Q: How do I clear old run data?**
 A: Scroll to **Danger Zone** at the bottom of the page and click **Clear all FBA history**. This deletes all `fba_runs` and `fba_output` documents from Firestore. Download any reports you need first.
+
+---
+
+---
+
+## 📊 Keepa SellerAmp Compare
+
+### What it does
+
+Upload your wholesale cost list and a Keepa Product Viewer export — no API key needed. The tool matches each product by UPC or ASIN, computes the recommended sell price, ROI, profit, and fee breakdown using the same logic as the FBA Calculator, and outputs a single comparison CSV with every Keepa price column, price-minus-cost diffs, and fee breakdowns side-by-side with your cost.
+
+**Key differences from the FBA Calculator:**
+- No API key or internet connection needed at run time — works entirely from a Keepa export file you download yourself.
+- Instant results — no token waits, no background worker.
+- Multiple ASINs per UPC: if one barcode maps to several Amazon listings, each becomes its own output row (sorted by how closely the product weight matches your input).
+
+---
+
+### For users
+
+#### Step 1 — Export your products from Keepa
+
+1. Sign in at [keepa.com](https://keepa.com).
+2. Open **Product Viewer** from the top navigation bar.
+3. In the search box, paste your UPCs, EANs, or ASINs — **comma separated** (e.g. `701619100159, 840187704557, B08N5WRWNW`).
+4. Wait for the results table to finish loading (all rows should show price data).
+5. Click **Export** (top-right of the results grid) and choose **Excel (.xlsx)** or **CSV**.
+
+> The critical column Keepa exports is called **"Imported by Code"** — it stores whatever code you searched for (UPC, EAN, ASIN). This is the link between your wholesale list and the Keepa data. If this column is missing, the tool cannot match.
+
+#### Step 2 — Prepare your cost list
+
+Download the **CSV Template** from the app (Step 1 inside the tool) and fill it in.
+
+| Column | Required? | Notes |
+|---|---|---|
+| `upc` | One of `upc` / `asin` | 12- or 14-digit barcode on the product |
+| `asin` | One of `upc` / `asin` | Amazon's 10-character identifier (starts with B) |
+| `cost` | Yes | Your wholesale cost per unit in USD |
+| `weight_lbs` | Recommended | Used to disambiguate products when multiple ASINs share a UPC |
+
+> **Excel tip:** format the `upc` column as **Plain Text** before pasting barcodes — Excel automatically converts long numbers to scientific notation (`8.83503E+11`), which breaks matching.
+
+#### Step 3 — Upload and run
+
+1. Open the app and select **Keepa SellerAmp Compare** in the sidebar.
+2. Upload your cost CSV in the left upload box.
+3. Upload your Keepa export (.xlsx or .csv) in the right upload box.
+4. Click **▶ Run Comparison**.
+5. Review the results table, then click **⬇ Download Output CSV**.
+
+#### Understanding the results
+
+The first columns are the most important:
+
+| Column | What it means |
+|---|---|
+| `Investment Decision` | **Recommend** if profit ≥ $1 AND ROI ≥ 30%; otherwise **Not Recommend** |
+| `Recommended Selling Price` | Calculated safe sell price (see rule below) |
+| `ROI` | Return on investment as a percentage |
+| `Estimated Profit` | Net profit after all fees, cost, and inbound shipping |
+| `cost` | Your wholesale cost (from your input file) |
+
+Then price columns (Buy Box first, then Amazon, then FBA New, then everything else), followed by diff columns (`Diff: Buy Box: Current` = buy-box price − your cost), fee breakdown, weights, and all remaining Keepa data.
+
+**"No Match Found"** rows mean the UPC or ASIN wasn't found in your Keepa export — go back to Keepa and import that product, then re-export and re-run.
+
+**Multiple rows for the same product** mean one UPC matches several Amazon ASINs (common for products sold in different configurations or by multiple brands). Each row is a different ASIN. They are sorted by how closely the Keepa package weight matches your input weight — the best physical match is first. Check `Weight Distance (lbs)` to see how close each match is.
+
+#### Fee column reference
+
+| Column | What it means |
+|---|---|
+| `Fee: Referral Fee` | Amazon's cut of the sale (typically 8–15% depending on category) |
+| `Fee: FBA Pick&Pack` | Amazon's per-unit FBA fulfillment fee (pulled from Keepa, or estimated from weight) |
+| `Fee: Sales Tax` | Sales tax rate (6.63%) applied to sell price |
+| `Fee: Inbound Cost` | Your cost to ship the unit to an Amazon fulfillment center ($0.80/lb) |
+| `Fee: Total Amazon Fees` | Referral + FBA + Sales Tax (everything Amazon takes before profit) |
+
+---
+
+### Recommended sell price — how it works
+
+This section explains the exact pricing logic used to compute **Recommended Selling Price**.
+
+#### For buyers / non-developers
+
+The goal is to find a sell price that is competitive *without* chasing temporary price spikes.
+
+Amazon buy-box prices move constantly. If you price at today's buy-box and the price drops tomorrow, you may be stuck with inventory you can't sell profitably. The algorithm anchors on the **30-day average** buy-box price, which smooths out day-to-day noise.
+
+**The rule in plain English:**
+
+1. **Start with the 30-day buy-box average.** This is the typical price over the past month — a more reliable signal than the current snapshot.
+2. **If the current price is *higher* than the 30-day average** (the market just spiked), don't get greedy. Use the midpoint between the average and the current price. This means you still benefit from the elevated market, but you're not pricing at a peak that could disappear.
+3. **If the current price is *at or below* the average** (the market is stable or dipped), use the 30-day average. Don't chase the dip.
+4. **If there is no buy-box history at all**, fall back to the cheapest live FBA-New price on the listing. If that's also missing, use the cheapest New listing of any fulfillment type.
+
+**Example:**
+
+| Scenario | 30-day avg | Current BB | Recommended price |
+|---|---|---|---|
+| Market is stable | $22.00 | $21.50 | $22.00 (use avg) |
+| Market just spiked | $22.00 | $26.00 | $24.00 (midpoint) |
+| Only current data | — | $19.99 | $19.99 (current BB) |
+| No buy-box at all | — | — | Cheapest FBA-New offer |
+
+#### For developers
+
+The algorithm is implemented in `src/keepa_compare/__main__.py → _rec_price()`, which mirrors `src/sa_rebuild/fba/analytics/pricing.py → recommended_sell_price()` exactly — but reads from Keepa export columns instead of the live Keepa API response.
+
+```python
+avg30  = "Buy Box: 90 days avg."   # Keepa export column
+cur_bb = "Buy Box: Current"        # Keepa export column
+
+if avg30 is not None and cur_bb is not None:
+    if avg30 < cur_bb:
+        return (avg30 + cur_bb) / 2  # market spiked — hedge to midpoint
+    return avg30                     # stable or dipping — use avg
+
+# Fallbacks (in order):
+# 1. avg30 alone
+# 2. cur_bb alone
+# 3. New, 3rd Party FBA: Current
+# 4. New: Current
+```
+
+**Why midpoint and not just avg30 when the market is up?**
+Using the midpoint instead of avg30 lets you capture some of the elevated margin when the market moves in your favour, while preventing you from pricing at a spike that may revert before your unit sells. Using the current price outright would be too aggressive — you'd be racing for a price that may last hours.
+
+---
+
+### For developers
+
+#### General setup
+
+```bash
+git clone https://github.com/Emanoid/selleramp_rebuild.git
+cd selleramp_rebuild
+python3 -m venv .venv
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
+```
+
+#### Running locally
+
+```bash
+streamlit run src/sa_rebuild/web/app.py
+```
+
+The Keepa SellerAmp Compare page appears automatically as **page 3** in the sidebar.
+
+#### Running from the CLI
+
+```bash
+python -m sa_rebuild.keepa_compare my_products.csv KeepaExport.xlsx
+python -m sa_rebuild.keepa_compare my_products.csv KeepaExport.xlsx -o analysis.csv
+```
+
+No environment variables or API keys required.
+
+#### Code layout
+
+```
+src/sa_rebuild/
+├── keepa_compare/
+│   ├── __init__.py           # empty — marks the package
+│   └── __main__.py           # all logic + CLI entry point
+│       ├── run_compare()         # public API — takes two Paths, returns DataFrame
+│       ├── build_index()         # builds asin_idx and upc_idx from the Keepa export
+│       ├── find_matches()        # matches one input row → list of Keepa row positions
+│       ├── _rec_price()          # recommended sell price (mirrors pricing.py)
+│       ├── _compute_fees()       # full fee breakdown (mirrors fees.py)
+│       └── _build_row()          # assembles one output dict from input + Keepa row
+└── web/pages/
+    └── 3_Keepa_Compare.py    # Streamlit UI — template download, two uploads, run button
+```
+
+#### Matching logic
+
+1. **ASIN input** — exact normalized match against the Keepa `ASIN` column. One input row → at most one output row.
+2. **UPC input** — checked against:
+   - `Imported by Code` (the code used to import the product into Keepa Product Viewer)
+   - Every value in `Product Codes: UPC` (comma-separated; any single match qualifies)
+   - Multiple matching ASINs → one output row per ASIN, sorted by weight distance ascending.
+3. **Weight distance sort** — `abs(keepa_package_weight_lbs − input_weight_lbs)`. Keepa's `Package: Weight (g)` is used first; `Item: Weight (g)` is the fallback. Rows where Keepa has no weight data are sorted to the end (distance = 9999). This sort does not filter — all matching ASINs appear in the output.
+
+#### Fee parameters
+
+All fee constants are at the top of `__main__.py` and mirror `config.yaml`:
+
+| Constant | Value | Source |
+|---|---|---|
+| `INBOUND_PER_LB` | $0.80 | SellerAmp profile: inbound per lb |
+| `SALES_TAX_PCT` | 6.63% | SellerAmp profile: misc % (sales tax rate) |
+| `REFERRAL_DEFAULT` | 15% | Used when Keepa's `Referral Fee %` column is empty |
+| `MIN_PROFIT_USD` | $1.00 | Minimum profit to be "Recommend" |
+| `MIN_ROI` | 30% | Minimum ROI to be "Recommend" |
+
+The `Referral Fee %` and `FBA Pick&Pack Fee` Keepa export columns are used directly when present. If `FBA Pick&Pack Fee` is missing, the weight-based tier table in `_fba_fee_fallback()` is used.
+
+#### Output column order
+
+| Block | Columns |
+|---|---|
+| Decision | Investment Decision, Recommended Selling Price, ROI, Estimated Profit, cost |
+| Prices | Buy Box → Amazon → FBA New → New → FBM → Prime Exclusive → Other new → Used tiers → Warehouse |
+| Diffs | `Diff: <each price column>` = price − your cost |
+| Fees | Referral Fee, FBA Pick&Pack, Sales Tax, Inbound Cost, Total Amazon Fees |
+| Weights | Keepa Package Weight (g/lbs), Keepa Item Weight (g), Input Weight (lbs), Weight Distance (lbs) |
+| Description | Title, Amazon URL, Matched ASIN |
+| Identifiers | Input UPC, Input ASIN |
+| All other Keepa columns | Every remaining column from the export, in original order |
 
 ---
 

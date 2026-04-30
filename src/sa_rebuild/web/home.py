@@ -50,3 +50,17 @@ with col2:
         "Members and company info managed in-app — no spreadsheet editing needed."
     )
     st.info("Select **LLC Compliance** in the sidebar to open this tool. Login required.")
+
+st.divider()
+
+col3, _ = st.columns(2, gap="large")
+
+with col3:
+    st.markdown("#### 📊 Keepa SellerAmp Compare")
+    st.markdown(
+        "Match your wholesale cost list against a **Keepa Product Viewer export** — "
+        "no API key needed. Get recommended sell price, ROI, profit, and full fee breakdown "
+        "for every product instantly. Multiple ASINs per UPC produce separate rows, "
+        "ranked by weight match. Download the full analysis as a CSV."
+    )
+    st.info("Select **Keepa SellerAmp Compare** in the sidebar to open this tool.")
