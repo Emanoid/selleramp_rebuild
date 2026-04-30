@@ -37,6 +37,7 @@ class RunState:
     completed_row_ids: List[int] = field(default_factory=list)
     errors: List[Dict[str, Any]] = field(default_factory=list)
     config_path: str = "config.yaml"
+    status: str = ""  # informational only for disk runs
 
     @classmethod
     def new(cls, input_csv: str, output_csv: str, row_ids: List[int], config_path: str = "config.yaml") -> "RunState":
@@ -99,6 +100,11 @@ def mark_done(state: RunState, row_id: int, tokens_left: int) -> None:
 
 def mark_error(state: RunState, row_id: int, upc: str, stage: str, message: str) -> None:
     state.errors.append({"row_id": row_id, "upc": upc, "stage": stage, "message": message})
+    save(state)
+
+
+def set_status(state: RunState, status: str) -> None:
+    state.status = status
     save(state)
 
 
