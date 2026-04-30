@@ -91,14 +91,21 @@ def _cached_list_runs() -> list:
 
 
 def _cached_load_last() -> Optional[cloud_state.RunState]:
-    """Return the most recent resumable run, derived from the already-cached run list.
+    """Return the most recent resumable run as a fully-loaded RunState.
 
-    Reuses _cached_list_runs() so no extra Firestore read is needed.
+    Scans the cached index (1 read) for a resumable candidate, then loads
+    the full document for that run (1 read) to get input_rows and
+    remaining_row_ids — which are not stored in the lightweight index.
     """
     runs = _cached_list_runs()
     for r in runs:
-        if r.is_resumable and r.remaining_row_ids:
-            return r
+        if r.is_resumable:
+            try:
+                full = cloud_state.load(r.run_id)
+                if full.remaining_row_ids:
+                    return full
+            except Exception:
+                continue
     return runs[0] if runs else None
 
 

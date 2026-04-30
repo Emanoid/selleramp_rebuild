@@ -194,7 +194,11 @@ def _patch_index(run_id: str, fields: dict) -> None:
 def set_status(state: RunState, status: str) -> None:
     state.status = status
     _partial_update(state.run_id, {"status": status})
-    _patch_index(state.run_id, {"status": status})
+    _patch_index(state.run_id, {
+        "status": status,
+        "rows_done": state.rows_done,
+        "rows_total": state.rows_total,
+    })
 
 
 def write_heartbeat(run_id: str, rows_done: int, tokens_left: int,
