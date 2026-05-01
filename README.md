@@ -24,6 +24,10 @@ Internal tools for Central Line Group LLC — Amazon FBA sourcing and business c
   - [What it does](#what-it-does-2)
   - [For users](#for-users-2)
   - [For developers](#for-developers-2)
+- [Finance Tracker](#-finance-tracker)
+  - [What it does](#what-it-does-3)
+  - [For users](#for-users-3)
+  - [For developers](#for-developers-3)
 - [Known Limitations](#known-limitations)
 
 ---
@@ -806,6 +810,112 @@ The `Referral Fee %` and `FBA Pick&Pack Fee` Keepa export columns are used direc
 | Description | Title, Amazon URL, Matched ASIN |
 | Identifiers | Input UPC, Input ASIN |
 | All other Keepa columns | Every remaining column from the export, in original order |
+
+---
+
+---
+
+## 💰 Finance Tracker
+
+### What it does
+
+Live replacement for `CentralLineGroup_Finance_Tracker.xlsx`. Tracks business expenses and Amazon income in Firestore with a full CRUD interface, then computes profit, tax reserve, reinvestment, and member distributions — all date-range-aware and recalculated live.
+
+| Tab | What it does |
+|---|---|
+| Dashboard | Financial summary for any date range — revenue, expenses, profit, tax, reinvestment, and per-member share with % of revenue |
+| Expenses | Log static and recurring expenses; built-in calculator totals any date range factoring in frequency and effective end dates |
+| Amazon Income | Log deposit records; calculator shows net revenue and deposit count for any range |
+| Amazon Profit | Date-range profit calculator — revenue and expenses auto-populate; editable tax rate, reinvest %, and member splits; save-as-defaults button |
+| Settings | Configure OneDrive receipts path, income type dropdown options, and default profit parameters |
+
+---
+
+### For users
+
+#### Signing in
+
+1. Open the app and select **Finance Tracker** in the sidebar.
+2. Sign in with your email and password (same Firebase account as LLC Compliance).
+3. To sign out, click **Sign out** in the left sidebar.
+
+#### Dashboard
+
+Select a start and end date (default: last 12 months). The table updates live showing:
+- Gross Revenue, Recurring Expenses, Static / One-time, Total Expenses, Pre-Tax Profit
+- Tax Reserve, Reinvestment, Distributable Profit, per-member share
+- Each row shows the dollar amount and its percentage of gross revenue.
+
+#### Expenses tab
+
+The **Expense Calculator** at the top computes:
+- **Static Total** — sum of static expenses whose start date falls within the selected range.
+- **Recurring Total** — for each recurring expense, clips the period to the selected range and multiplies by the appropriate unit (days / weeks / months / years).
+- **All Total** — combined.
+
+The table shows every expense with a computed **Total Spent** column (from start date to today or end date, whichever comes first).
+
+**Recurring frequency behaviour:**
+| Frequency | Calculation |
+|---|---|
+| Day | unit_price × number of days in range |
+| Week | unit_price × days / 7 |
+| Month | unit_price × inclusive month count |
+| Year | unit_price × inclusive year count |
+| Once | counted if start date falls in range |
+
+#### Amazon Income tab
+
+Add each Amazon payout as a record with date, type, and amount. The calculator sums net revenue and deposit count for any custom date range.
+
+#### Amazon Profit tab
+
+Set a date range. The tab auto-pulls:
+- **Revenue** — income deposits whose date falls in the range.
+- **Expenses** — expenses whose full period (start ≥ range start AND effective end ≤ range end) falls within the range.
+
+Edit Tax Rate and Reinvest % inline — changes affect only this session until you click **Save as Defaults**. Member ownership percentages are editable here too. Click **↺ Reset to Defaults** to reload saved values.
+
+#### Settings tab
+
+- **Receipt Storage** — set the OneDrive folder URL or path. Shown as a hint in the Expenses add/edit dialog.
+- **Income Types** — add or remove options in the Amazon Income Type dropdown.
+- **Default Profit Settings** — edit member names, ownership percentages, default tax rate, and default reinvest %. These are the values the Amazon Profit tab loads on first visit each session.
+
+---
+
+### For developers
+
+#### Firestore collections
+
+| Collection | Document shape |
+|---|---|
+| `finance_expenses` | `type`, `item_description`, `unit_price`, `frequency`, `start_date`, `end_date`, `receipt_filename`, `notes`, `order`, `created_at`, `updated_at`, `updated_by` |
+| `finance_income` | `date`, `type`, `amount`, `notes`, `order`, `created_at`, `updated_at`, `updated_by` |
+| `finance_settings/finance_config` | `onedrive_receipts_path`, `income_types`, `members` (list of `{name, pct}`), `tax_rate`, `reinvest_pct` |
+
+#### Code layout
+
+```
+src/sa_rebuild/
+├── auth.py                        # Shared Firebase auth — sign_in() + login_wall()
+│                                  #   used by both LLC Compliance and Finance Tracker
+├── finance_tracker/
+│   ├── __init__.py
+│   └── db.py                      # All Firestore CRUD:
+│                                  #   get/add/update/delete expenses and income
+│                                  #   ensure_order / move_rows for both collections
+│                                  #   get_settings / save_settings
+└── web/pages/
+    └── 4_Finance_Tracker.py       # All Finance Tracker UI — tabs, dialogs, calculators
+```
+
+#### Key architectural notes
+
+- **Shared auth module** — `sa_rebuild.auth.login_wall(session_key, app_name)` is used by both LLC Compliance and Finance Tracker. Each app passes its own `session_key` so sessions are independent.
+- **Calculator logic** — `_compute_expense_for_range()` clips each expense's effective period to `[calc_start, calc_end]` before computing. This matches the Excel SUMPRODUCT formula for the recurring total. The Profit tab uses `_compute_profit_expenses()` which matches the Excel formula exactly (start_date ≥ profit_start AND eff_end ≤ profit_end, using pre-computed total_spent).
+- **Profit tab session state** — tax rate, reinvest %, and member %s are stored in `st.session_state` so edits survive rerenders without persisting to Firestore. "Save as Defaults" is the explicit save action.
+- **No module-level DB imports** — all `from sa_rebuild.finance_tracker.db import ...` calls are lazy, matching the pattern in LLC Compliance.
 
 ---
 
