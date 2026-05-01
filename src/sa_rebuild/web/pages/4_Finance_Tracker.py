@@ -675,93 +675,97 @@ def _render_profit_tab(
     exp_total = _compute_profit_expenses(expenses, profit_start, profit_end)
     pre_tax   = revenue - exp_total
 
-    st.divider()
-    rc1, rc2, rc3 = st.columns(3)
-    rc1.metric("Revenue",        f"${revenue:,.2f}")
-    rc2.metric("Expenses",       f"${exp_total:,.2f}")
-    rc3.metric("Pre-Tax Profit", f"${pre_tax:,.2f}")
-    rc3.caption(f"= ${revenue:,.2f} − ${exp_total:,.2f}")
+    _, _col, _ = st.columns([1, 6, 1])
+    with _col:
+        st.divider()
+        rc1, rc2, rc3 = st.columns(3)
+        with rc1:
+            st.metric("Revenue",  f"${revenue:,.2f}")
+            st.caption(" ")  # height equaliser so all three columns match rc3
+        with rc2:
+            st.metric("Expenses", f"${exp_total:,.2f}")
+            st.caption(" ")
+        with rc3:
+            st.metric("Pre-Tax Profit", f"${pre_tax:,.2f}")
+            st.caption(f"= ${revenue:,.2f} − ${exp_total:,.2f}")
 
-    # Tax & reinvestment — inputs and computed values in one row
-    # Widget keys include ver so changing ver forces fresh widgets (fixes Reset)
-    st.divider()
-    t1, t2, t3, t4 = st.columns(4)
-    tax_pct_input = t1.number_input(
-        "Tax Rate %",
-        value=st.session_state["ft_tax_rate"] * 100,
-        min_value=0.0, max_value=100.0, step=0.5, format="%.1f",
-        key=f"ft_w_tax_{ver}",
-    )
-    st.session_state["ft_tax_rate"] = tax_pct_input / 100
-    tax_reserve = max(0.0, pre_tax * (tax_pct_input / 100))
+        # Tax & reinvestment — widget keys include ver so changing ver forces fresh widgets (fixes Reset)
+        st.divider()
+        t1, t2 = st.columns(2)
+        with t1:
+            tax_pct_input = st.number_input(
+                "Tax Rate %",
+                value=st.session_state["ft_tax_rate"] * 100,
+                min_value=0.0, max_value=100.0, step=0.5, format="%.1f",
+                key=f"ft_w_tax_{ver}",
+            )
+            st.session_state["ft_tax_rate"] = tax_pct_input / 100
+            tax_reserve = max(0.0, pre_tax * (tax_pct_input / 100))
+            st.metric("Tax Reserve", f"${tax_reserve:,.2f}")
+            st.caption(f"= ${pre_tax:,.2f} × {tax_pct_input:.1f}%")
 
-    reinvest_input = t2.number_input(
-        "Reinvest %",
-        value=st.session_state["ft_reinvest_pct"] * 100,
-        min_value=0.0, max_value=100.0, step=0.5, format="%.1f",
-        key=f"ft_w_rein_{ver}",
-    )
-    st.session_state["ft_reinvest_pct"] = reinvest_input / 100
-    reinvest_amt = max(0.0, (pre_tax - tax_reserve) * (reinvest_input / 100))
-    distributable = pre_tax - tax_reserve - reinvest_amt
+        with t2:
+            reinvest_input = st.number_input(
+                "Reinvest %",
+                value=st.session_state["ft_reinvest_pct"] * 100,
+                min_value=0.0, max_value=100.0, step=0.5, format="%.1f",
+                key=f"ft_w_rein_{ver}",
+            )
+            st.session_state["ft_reinvest_pct"] = reinvest_input / 100
+            reinvest_amt = max(0.0, (pre_tax - tax_reserve) * (reinvest_input / 100))
+            st.metric("Reinvest Amount", f"${reinvest_amt:,.2f}")
+            st.caption(f"= (${pre_tax:,.2f} − ${tax_reserve:,.2f}) × {reinvest_input:.1f}%")
 
-    t3.metric("Tax Reserve",     f"${tax_reserve:,.2f}")
-    t3.caption(f"= ${pre_tax:,.2f} × {tax_pct_input:.1f}%")
-    t4.metric("Reinvest Amount", f"${reinvest_amt:,.2f}")
-    t4.caption(f"= (${pre_tax:,.2f}−${tax_reserve:,.2f}) × {reinvest_input:.1f}%")
+        distributable = pre_tax - tax_reserve - reinvest_amt
 
-    # Member distribution
-    st.divider()
-    st.metric("Distributable", f"${distributable:,.2f}")
-    st.caption(f"= ${pre_tax:,.2f}−${tax_reserve:,.2f}−${reinvest_amt:,.2f}")
+        # Member distribution
+        st.divider()
+        st.metric("Distributable", f"${distributable:,.2f}")
+        st.caption(f"= ${pre_tax:,.2f} − ${tax_reserve:,.2f} − ${reinvest_amt:,.2f}")
 
-    members   = st.session_state["ft_members"]
-    total_pct = sum(m["pct"] for m in members)
-    if members and abs(total_pct - 1.0) > 0.001:
-        st.warning(f"Member %s sum to {total_pct*100:.1f}% — must equal 100%.")
+        members   = st.session_state["ft_members"]
+        total_pct = sum(m["pct"] for m in members)
+        if members and abs(total_pct - 1.0) > 0.001:
+            st.warning(f"Member %s sum to {total_pct*100:.1f}% — must equal 100%.")
 
-    # Column headers for member rows
-    hc1, hc2, hc3 = st.columns([3, 2, 3])
-    hc1.caption("Member")
-    hc2.caption("% ownership")
-    hc3.caption("Share ($)")
+        for i, m in enumerate(members):
+            mc1, mc2, mc3 = st.columns([3, 2, 3])
+            mc1.markdown(f"**{m['name']}**")
+            new_pct = mc2.number_input(
+                "% ownership" if i == 0 else f"% {m['name']}",
+                value=m["pct"] * 100,
+                min_value=0.0, max_value=100.0, step=0.5, format="%.1f",
+                key=f"ft_w_mpct_{i}_{ver}",
+                label_visibility="visible" if i == 0 else "collapsed",
+            )
+            members[i]["pct"] = new_pct / 100
+            share = distributable * members[i]["pct"]
+            with mc3:
+                st.metric(
+                    "Share ($)" if i == 0 else f"{m['name']} Share",
+                    f"${share:,.2f}",
+                    label_visibility="visible" if i == 0 else "collapsed",
+                )
+                st.caption(f"= ${distributable:,.2f} × {new_pct:.1f}%")
+        st.session_state["ft_members"] = members
 
-    for i, m in enumerate(members):
-        mc1, mc2, mc3 = st.columns([3, 2, 3])
-        mc1.markdown(f"**{m['name']}**")
-        new_pct = mc2.number_input(
-            f"% {m['name']}",
-            value=m["pct"] * 100,
-            min_value=0.0, max_value=100.0, step=0.5, format="%.1f",
-            key=f"ft_w_mpct_{i}_{ver}",
-            label_visibility="collapsed",
-        )
-        members[i]["pct"] = new_pct / 100
-        share = distributable * members[i]["pct"]
-        mc3.metric(f"{m['name']} Share", f"${share:,.2f}", label_visibility="collapsed")
-        mc3.caption(f"= ${distributable:,.2f} × {new_pct:.1f}%")
-    st.session_state["ft_members"] = members
-
-    st.divider()
-    col_save, col_reset = st.columns(2)
-    if col_save.button("💾 Save as Defaults", key="btn_save_profit_def", use_container_width=True):
-        from sa_rebuild.finance_tracker.db import save_settings
-        s = _load_settings()
-        s["tax_rate"]    = st.session_state["ft_tax_rate"]
-        s["reinvest_pct"] = st.session_state["ft_reinvest_pct"]
-        s["members"]     = st.session_state["ft_members"]
-        save_settings(s)
-        st.success("Saved as defaults.")
-    if col_reset.button("↺ Reset to Defaults", key="btn_reset_profit", use_container_width=True):
-        # Bump version to force fresh widget instances on next render
-        st.session_state["ft_profit_ver"] = st.session_state.get("ft_profit_ver", 0) + 1
-        # Clear mirrored state so setdefault re-reads from settings
-        for k in ["ft_tax_rate", "ft_reinvest_pct", "ft_members"]:
-            st.session_state.pop(k, None)
-        # Clear any stale versioned widget keys
-        for k in [k for k in st.session_state if k.startswith("ft_w_")]:
-            del st.session_state[k]
-        st.rerun()
+        st.divider()
+        col_save, col_reset = st.columns(2)
+        if col_save.button("💾 Save as Defaults", key="btn_save_profit_def", use_container_width=True):
+            from sa_rebuild.finance_tracker.db import save_settings
+            s = _load_settings()
+            s["tax_rate"]     = st.session_state["ft_tax_rate"]
+            s["reinvest_pct"] = st.session_state["ft_reinvest_pct"]
+            s["members"]      = st.session_state["ft_members"]
+            save_settings(s)
+            st.success("Saved as defaults.")
+        if col_reset.button("↺ Reset to Defaults", key="btn_reset_profit", use_container_width=True):
+            st.session_state["ft_profit_ver"] = st.session_state.get("ft_profit_ver", 0) + 1
+            for k in ["ft_tax_rate", "ft_reinvest_pct", "ft_members"]:
+                st.session_state.pop(k, None)
+            for k in [k for k in st.session_state if k.startswith("ft_w_")]:
+                del st.session_state[k]
+            st.rerun()
 
 
 def _render_settings_tab(user_email: str) -> None:
@@ -821,14 +825,14 @@ def _render_settings_tab(user_email: str) -> None:
 
         # Default profit settings
         st.markdown("**Default Profit Settings**")
-        st.caption(
-            "Pre-populate the Amazon Profit tab. "
-            "Change them there for ad-hoc calculations without overwriting these defaults."
-        )
 
         members = list(settings.get("members", []))
 
         with st.form("ft_form_profit_defaults"):
+            st.caption(
+                "Pre-populate the Amazon Profit tab. "
+                "Change them there for ad-hoc calculations without overwriting these defaults."
+            )
             d1, d2 = st.columns(2)
             new_tax = d1.number_input(
                 "Default Tax Rate %",
@@ -843,20 +847,21 @@ def _render_settings_tab(user_email: str) -> None:
 
             if members:
                 st.markdown("**Members & Ownership %**")
-                # Column headers
-                hm1, hm2 = st.columns([3, 2])
-                hm1.caption("Name")
-                hm2.caption("% ownership")
 
             new_members = []
             for i, m in enumerate(members):
                 mc1, mc2 = st.columns([3, 2])
-                name = mc1.text_input(f"Name {i+1}", value=m.get("name", ""), key=f"s_mn_{i}",
-                                      label_visibility="collapsed")
+                name = mc1.text_input(
+                    "Name" if i == 0 else f"Name {i+1}",
+                    value=m.get("name", ""), key=f"s_mn_{i}",
+                    label_visibility="visible" if i == 0 else "collapsed",
+                )
                 pct  = mc2.number_input(
-                    f"% {i+1}", value=float(m.get("pct", 0)) * 100,
+                    "% ownership" if i == 0 else f"% {i+1}",
+                    value=float(m.get("pct", 0)) * 100,
                     min_value=0.0, max_value=100.0, step=0.5, format="%.1f",
-                    key=f"s_mp_{i}", label_visibility="collapsed",
+                    key=f"s_mp_{i}",
+                    label_visibility="visible" if i == 0 else "collapsed",
                 )
                 new_members.append({"name": name.strip(), "pct": pct / 100})
 
@@ -940,10 +945,10 @@ button p, button span { font-size: 0.68rem !important; margin: 0 !important; lin
 [data-testid="stMetricDelta"]   { font-size: 0.65rem !important; }
 
 /* Reduce gap between all elements in the main block */
-[data-testid="stVerticalBlock"] { gap: 0.3rem !important; }
+[data-testid="stVerticalBlock"] { gap: 0.85rem !important; }
 
 /* Compact dividers */
-hr { margin: 0.2rem 0 !important; }
+hr { margin: 0.6rem 0 !important; }
 
 /* Compact form field labels */
 [data-testid="stNumberInput"] label p,
