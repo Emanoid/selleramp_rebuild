@@ -14,12 +14,12 @@ if str(_SRC) not in sys.path:
 from sa_rebuild import __version__
 
 st.title("📦 CentralLine Sourcing Toolbox")
-st.caption(f"v{__version__} — internal tools for Amazon FBA product sourcing")
+st.caption(f"v{__version__} — internal tools for Amazon FBA sourcing and business operations")
 
 st.markdown(
     """
-    A suite of sourcing tools built for CentralLine Group.
-    Select a tool from the **sidebar** to get started.
+    A suite of tools built for Central Line Group.
+    Select a tool from the **sidebar** or click a card below to get started.
     """
 )
 
@@ -37,7 +37,7 @@ with col1:
         "fees, ROI, monthly sales, competition analysis, and a direct storefront link. "
         "Powered by your Keepa Pro key. Picks up where it left off if interrupted."
     )
-    st.info("Select **Keepa Search Tool** in the sidebar to open this tool.")
+    st.page_link("pages/1_Keepa_Search_Tool.py", label="Open Keepa Search Tool →", icon="🧮")
 
 with col2:
     st.markdown("#### 📋 LLC Compliance Tracker")
@@ -49,11 +49,11 @@ with col2:
         "of every status change. "
         "Members and company info managed in-app — no spreadsheet editing needed."
     )
-    st.info("Select **LLC Compliance** in the sidebar to open this tool. Login required.")
+    st.page_link("pages/2_LLC_Compliance.py", label="Open LLC Compliance →", icon="📋")
 
 st.divider()
 
-col3, _ = st.columns(2, gap="large")
+col3, col4 = st.columns(2, gap="large")
 
 with col3:
     st.markdown("#### 📊 Keepa SellerAmp Compare")
@@ -63,4 +63,16 @@ with col3:
         "for every product instantly. Multiple ASINs per UPC produce separate rows, "
         "ranked by weight match. Download the full analysis as a CSV."
     )
-    st.info("Select **Keepa SellerAmp Compare** in the sidebar to open this tool.")
+    st.page_link("pages/3_Keepa_Compare.py", label="Open Keepa SellerAmp Compare →", icon="📊")
+
+with col4:
+    st.markdown("#### 💰 Finance Tracker")
+    st.markdown(
+        "Live replacement for the Excel finance tracker. "
+        "Log **expenses** (static or recurring with frequency) and **Amazon income** deposits. "
+        "The built-in calculators compute totals for any date range, factoring in recurring "
+        "schedules. The Profit tab breaks down revenue, expenses, tax reserve, reinvestment, "
+        "and member distributions. Dashboard shows a full financial summary for any period. "
+        "Login required — financial data is private."
+    )
+    st.page_link("pages/4_Finance_Tracker.py", label="Open Finance Tracker →", icon="💰")

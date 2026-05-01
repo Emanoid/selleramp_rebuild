@@ -14,5 +14,6 @@ pg = st.navigation([
     st.Page("pages/1_Keepa_Search_Tool.py", title="Keepa Search Tool", icon="🧮"),
     st.Page("pages/2_LLC_Compliance.py", title="LLC Compliance", icon="📋"),
     st.Page("pages/3_Keepa_Compare.py", title="Keepa SellerAmp Compare", icon="📊"),
+    st.Page("pages/4_Finance_Tracker.py", title="Finance Tracker", icon="💰"),
 ])
 pg.run()

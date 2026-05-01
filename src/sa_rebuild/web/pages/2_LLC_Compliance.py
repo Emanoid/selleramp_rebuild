@@ -66,35 +66,8 @@ def _firebase_ready() -> bool:
 
 
 def _login_wall() -> Optional[dict]:
-    ss = st.session_state
-    if ss.get("compliance_user"):
-        return ss["compliance_user"]
-
-    st.markdown(
-        "<h2 style='margin-bottom:0'>🔐 LLC Compliance Login</h2>"
-        f"<p style='color:grey'>{_COMPANY['name']}</p>",
-        unsafe_allow_html=True,
-    )
-    with st.form("compliance_login", clear_on_submit=False):
-        email     = st.text_input("Email")
-        password  = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Sign in", type="primary")
-
-    if submitted:
-        if not email or not password:
-            st.error("Enter your email and password.")
-        else:
-            try:
-                from sa_rebuild.compliance.auth import sign_in
-                user = sign_in(email.strip(), password)
-                ss["compliance_user"] = user
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
-            except RuntimeError as exc:
-                st.error(f"Configuration error: {exc}")
-    st.stop()
-    return None
+    from sa_rebuild.auth import login_wall
+    return login_wall("compliance_user", "LLC Compliance")
 
 
 def _load(category: str) -> list[dict]:

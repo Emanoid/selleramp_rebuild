@@ -39,6 +39,48 @@ All remaining Keepa columns
 
 ---
 
+---
+
+## finance_tracker — completed 2026-04-30
+
+### What was built
+New Streamlit webapp reproducing `CentralLineGroup_Finance_Tracker.xlsx` as a 4th app in the toolbox.
+
+### Files created
+- `src/sa_rebuild/auth.py` — shared Firebase login wall (`sign_in`, `login_wall(session_key, app_name)`); both LLC Compliance and Finance Tracker now use this
+- `src/sa_rebuild/finance_tracker/__init__.py` — package marker
+- `src/sa_rebuild/finance_tracker/db.py` — Firestore CRUD for expenses, income, and settings
+- `src/sa_rebuild/web/pages/4_Finance_Tracker.py` — full UI: Dashboard, Expenses, Amazon Income, Amazon Profit, Settings tabs
+
+### Files modified
+- `src/sa_rebuild/web/pages/2_LLC_Compliance.py` — `_login_wall()` now delegates to `sa_rebuild.auth.login_wall`
+- `src/sa_rebuild/web/app.py` — Finance Tracker registered as page 4
+- `src/sa_rebuild/web/home.py` — Finance Tracker card added; all 4 tool cards converted from `st.info` text to `st.page_link` clickable buttons
+- `README.md` — Finance Tracker section added (user docs, developer docs, Firestore schema, code layout)
+
+### Key decisions
+- Shared auth module: both apps call `login_wall(session_key, app_name)` — sessions are independent via different `session_key` values
+- Expense calculator clips each recurring expense to `[calc_start, calc_end]` — matches Excel SUMPRODUCT logic
+- Profit tab uses a stricter filter (entire expense period must fall within profit range) — matches Excel's B10 formula
+- Amazon Profit tab uses session state for tax rate / reinvest % / member %s; "Save as Defaults" is the explicit persist action
+
+### Firestore collections added
+- `finance_expenses`, `finance_income`, `finance_settings`
+
+### Bug fixes & UX improvements — 2026-04-30
+
+All 9 issues from user testing addressed in `4_Finance_Tracker.py`:
+
+1. **Bug #1 fixed** — `_compute_expense_for_range`: was capping open-ended expenses to `today` instead of `calc_end`; now uses `calc_end` so future-range recurring expenses calculate correctly
+2. **Bug #2 fixed** — `_render_expense_filters` / `_render_income_filters`: `st.session_state.pop()` removed key but Streamlit multiselect retained visual state; now sets `= []` to properly reset widgets
+3. **Bug #3 fixed** — `_compute_profit_expenses`: was capping open-ended expenses to `today` instead of `profit_end`; now includes all recurring expenses whose period falls within the profit range
+4. **% symbols** — Profit tab member section now has column headers ("Member | % ownership | Share ($)")
+5. **Formula captions** — Pre-Tax Profit, Tax Reserve, Reinvest Amount, Distributable, and each member share now show the formula with actual values as a small caption below the metric
+6. **Compact layout** — Removed all `st.subheader()` calls replaced with `st.markdown("**...**")` or eliminated; Profit tab restructured to 4-column row for Tax/Reinvest (no scrolling); enhanced CSS shrinks metrics, labels, inputs, dividers; removed duplicate `st.subheader()` calls in `main()`
+7. **Receipt reminder** — Add/Edit expense modals now show a persistent `st.info()` banner (not just a tooltip) with the OneDrive path
+8. **Settings alignment** — Settings tab wrapped in `st.columns([1,6,1])` to narrow it; member rows now have "Name / % ownership" caption headers; labels hidden on inputs use caption headers for context
+9. **Consistent spacing** — CSS improvements applied globally: compact metrics, captions, form labels, dividers, number inputs, column gaps
+
 ## Next steps
-- None outstanding for this feature
+- Test end-to-end with live Firebase (login, add expense, calculator, profit tab)
 - Deploy: push to main, Streamlit Cloud picks up the new page automatically
