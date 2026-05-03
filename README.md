@@ -646,7 +646,11 @@ Download the **CSV Template** from the app (Step 1 inside the tool) and fill it 
 2. Upload your cost CSV in the left upload box.
 3. Upload your Keepa export (.xlsx or .csv) in the right upload box.
 4. Click **▶ Run Comparison**.
-5. Review the results table, then click **⬇ Download Output CSV**.
+5. Review the results table and use any of the four download buttons:
+   - **⬇ Download Excel** — all rows, standard layout
+   - **⬇ Download Excel (Transposed)** — all rows, fields as rows / products as columns
+   - **⬇ Download CSV** — all rows, plain CSV
+   - **✅ Download Recommended Only** — transposed Excel filtered to `Recommend` rows only
 
 #### Understanding the results
 

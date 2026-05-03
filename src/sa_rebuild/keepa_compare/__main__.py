@@ -99,7 +99,7 @@ def _num(v) -> Optional[float]:
     if isinstance(v, float) and pd.isna(v):
         return None
     try:
-        return float(str(v).strip().rstrip("%"))
+        return float(str(v).strip().lstrip("$").replace(",", "").rstrip("%"))
     except (ValueError, TypeError):
         return None
 
