@@ -216,10 +216,13 @@ if cost_file and keepa_file:
         with st.spinner("Building Excel files…"):
             xlsx_bytes   = _to_xlsx(result_df)
             xlsx_t_bytes = _to_xlsx_transposed(result_df)
+            rec_df       = result_df[result_df.get("Investment Decision") == "Recommend"]
+            xlsx_rec_bytes = _to_xlsx_transposed(rec_df)
 
-        st.session_state["kc_result"]   = result_df
-        st.session_state["kc_xlsx"]     = xlsx_bytes
-        st.session_state["kc_xlsx_t"]   = xlsx_t_bytes
+        st.session_state["kc_result"]    = result_df
+        st.session_state["kc_xlsx"]      = xlsx_bytes
+        st.session_state["kc_xlsx_t"]    = xlsx_t_bytes
+        st.session_state["kc_xlsx_rec"]  = xlsx_rec_bytes
         st.session_state["kc_summary"]  = {
             "total":     len(result_df),
             "recommend": int((result_df.get("Investment Decision", pd.Series(dtype=str)) == "Recommend").sum()),
@@ -242,7 +245,7 @@ if "kc_result" in st.session_state:
     c4.metric("⚠ No Match",        summary["no_match"])
 
     # ── Download buttons — above the preview so they appear immediately ───────
-    dl1, dl2, dl3 = st.columns(3)
+    dl1, dl2, dl3, dl4 = st.columns(4)
     with dl1:
         st.download_button(
             label="⬇ Download Excel",
@@ -263,6 +266,13 @@ if "kc_result" in st.session_state:
             data=result_df.to_csv(index=False),
             file_name="keepa_compare_output.csv",
             mime="text/csv",
+        )
+    with dl4:
+        st.download_button(
+            label="✅ Download Recommended Only",
+            data=st.session_state["kc_xlsx_rec"],
+            file_name="keepa_compare_recommended.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
     st.dataframe(result_df, use_container_width=True, height=500)
