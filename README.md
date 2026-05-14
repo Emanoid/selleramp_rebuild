@@ -291,7 +291,8 @@ Live replacement for the Excel compliance tracker. Tracks every quarterly, annua
 The dashboard loads automatically on sign-in. It shows:
 - **Overdue** — any filing whose due date has passed and status is not Done.
 - **Coming up next** — the 5 nearest upcoming deadlines, with days remaining.
-- **Filing Quick Reference** — a static table of all recurring filing types, who files them, and their typical deadlines.
+- **Filing Quick Reference** — editable table of recurring filing types, who files them, and their due-date patterns. Add / Edit / Delete / Move Up / Move Down via the action bar above the table. Persists to the Firestore `quick_reference` collection (auto-seeded on first load).
+- **Key Websites** — editable table of the portals you use to file. Same Add / Edit / Delete / reorder controls. Persists to the Firestore `key_websites` collection (auto-seeded on first load).
 
 #### Editing a filing
 
@@ -310,7 +311,7 @@ The default view hides rows marked **Done** — only Pending and Overdue rows ar
 
 #### Adding a filing
 
-Click **+ Add** in the action bar above the table. Fill in the filing type, jurisdiction, due date, and assignee, then click **Add**. Newly added rows are marked **New** in the first column until you navigate away.
+Click **+ Add** in the action bar above the table. Fill in the filing type, jurisdiction, due date, and assignee(s), then click **Add**. The **Assigned To** field is a multi-select — pick one name for solo filings or multiple for joint filings (e.g. both members on a Joint Federal 1040). Newly added rows are marked **New** in the first column until you navigate away.
 
 #### Deleting a filing
 
@@ -392,6 +393,43 @@ Options:
 | `--service-account PATH` | Path to service account JSON (default: `service_account.json`) |
 
 Re-running is safe — rows are upserted by deterministic document IDs. Structural fields (filing type, jurisdiction, year, quarter) are updated; status, notes, date filed, and confirmation number are preserved from whatever is already in Firestore.
+
+#### Migrating filings to new due-date pattern / names
+
+`scripts/migrate_filings.py` is a one-shot migration that corrects existing filings against the verified due-date pattern (e.g. ST-50 due on the 20th of the month after each quarter ends) and renames `NJ Sales Tax Return` → `NJ Sales Tax Return. ST-50`. It also merges duplicate joint filings (e.g. two `Personal Form 1040` rows assigned to different members) into a single row with a multi-member `assigned_to` list, then deletes the redundant docs. Notes are overwritten with short where-to-file + calculation hints.
+
+```bash
+# 1. Dry-run (default) — writes a log file but no Firestore changes
+python3 scripts/migrate_filings.py
+
+# 2. Inspect scripts/migration_log_<timestamp>.txt to confirm the plan
+
+# 3. Apply for real
+python3 scripts/migrate_filings.py --apply
+```
+
+| Flag | What it does |
+|---|---|
+| `--apply` | Actually write to Firestore. Without it the script is a dry-run. |
+| `--service-account PATH` | Path to service account JSON (default: `service_account.json`) |
+| `--log PATH` | Override the log file path |
+
+The script never deletes filings it doesn't recognise — unmatched filings are skipped and recorded in the log under the **Skipped** section. Filings with `status="Done"` are not re-dated (their notes still get refreshed). The full file-level header comment includes the exact mapping rules.
+
+#### Data shape note — `assigned_to`
+
+`filings.assigned_to` is stored as `list[str]` to support joint filings (e.g. `["Emmanuel", "Kadiatu"]` on a Joint Federal 1040). Legacy documents containing a single string are tolerated on read — the UI normalises them on the fly — but new writes always use a list.
+
+#### Dashboard collections
+
+The Dashboard tab edits two Firestore collections directly:
+
+| Collection | Fields |
+|---|---|
+| `quick_reference` | `filing`, `frequency`, `due_date_pattern`, `who_files`, `where_to_file`, `order` |
+| `key_websites`    | `name`, `url`, `note`, `order` |
+
+Both collections auto-seed on first read with the verified default values in `sa_rebuild/compliance/db.py` (`_QUICK_REF_SEED`, `_KEY_SITES_SEED`). After seeding the UI is the source of truth — edit rows in the Dashboard rather than in code.
 
 #### Deploying to Streamlit Community Cloud
 

@@ -14,28 +14,29 @@ _COMPANY = {
     "name": "Central Line Group LLC",
 }
 
-_QUICK_REF = [
-    ("NJ Sales Tax Return",      "Quarterly", "Jan 31 / Apr 30 / Jul 31 / Oct 31", "LLC",         "nj.gov/taxation"),
-    ("Federal Est. Tax 1040-ES", "Quarterly", "Apr 15 / Jun 15 / Sep 15 / Jan 15", "Each member", "irs.gov/payments"),
-    ("NJ Est. Tax NJ-1040-ES",   "Quarterly", "Apr 15 / Jun 15 / Sep 15 / Jan 15", "Each member", "nj.gov/taxation"),
-    ("Federal Form 1065",        "Annual",    "March 15",                           "LLC",         "irs.gov"),
-    ("NJ Form NJ-1065",          "Annual",    "March 15",                           "LLC",         "nj.gov/taxation"),
-    ("Personal Form 1040",       "Annual",    "April 15",                           "Each member", "irs.gov"),
-    ("Personal NJ-1040",         "Annual",    "April 15",                           "Each member", "nj.gov/taxation"),
-    ("NJ Annual Report ($75)",   "Annual",    "April 30",                           "LLC",         "njportal.com/DOR/annualreports"),
-    ("FinCEN BOI Report",        "One-time", "Filed Apr 27, 2026",                  "LLC",         "boiefiling.fincen.gov"),
-    ("NJ LLC Formation",         "One-time", "Filed Apr 27, 2026",                  "LLC",         "njportal.com"),
-]
-
-_KEY_SITES = [
-    ("IRS Direct Pay",     "irs.gov/payments",               "Federal est. tax & 1065"),
-    ("NJ Taxation Portal", "nj.gov/taxation",                "NJ est. tax, sales tax, NJ-1065"),
-    ("NJ Annual Report",   "njportal.com/DOR/annualreports", "LLC renewal -- $75/yr"),
-    ("FinCEN BOI Filing",  "boiefiling.fincen.gov",          "Beneficial ownership report"),
-]
+_FREQUENCY_OPTIONS = ["Quarterly", "Annual", "One-time", "Monthly", "Other"]
 
 _STATUS_OPTIONS = ["Pending", "Done", "Overdue"]
 _STATUS_ICON    = {"Pending": "⏳", "Done": "✅", "Overdue": "⚠️"}
+
+
+def _assigned_str(value) -> str:
+    """Render assigned_to (list[str] | legacy str | None) as a comma-joined string."""
+    if not value:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(v) for v in value if v)
+    return str(value)
+
+
+def _assigned_list(value) -> list[str]:
+    """Normalize assigned_to to a clean list[str]."""
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    s = str(value).strip()
+    return [s] if s else []
 
 _TEMPLATES: dict[str, str] = {
     "quarterly": (
@@ -119,7 +120,7 @@ def _display_df(rows: list[dict], category: str) -> pd.DataFrame:
                 "Jurisdiction": r.get("jurisdiction", ""),
                 "Quarter":      r.get("quarter", "") or r.get("period", ""),
                 "Due Date":     r.get("due_date"),
-                "Assigned To":  r.get("assigned_to", ""),
+                "Assigned To":  _assigned_str(r.get("assigned_to")),
                 "Status":       _sicon(r.get("status", "Pending")),
                 "Date Filed":   r.get("date_filed"),
                 "Notes":        r.get("notes", ""),
@@ -140,7 +141,7 @@ def _display_df(rows: list[dict], category: str) -> pd.DataFrame:
                 "Filing":       r.get("filing_type", ""),
                 "Jurisdiction": r.get("jurisdiction", ""),
                 "Due Date":     r.get("due_date"),
-                "Assigned To":  r.get("assigned_to", ""),
+                "Assigned To":  _assigned_str(r.get("assigned_to")),
                 "Status":       _sicon(r.get("status", "Pending")),
                 "Date Filed":   r.get("date_filed"),
                 "Notes":        r.get("notes", ""),
@@ -217,10 +218,12 @@ def _edit_modal(row: dict, user_email: str, has_confirmation: bool, category: st
     )
     from sa_rebuild.compliance.db import get_members
     assigned_opts = get_members()
-    cur_who = row.get("assigned_to", "LLC")
-    new_who = c6.selectbox(
+    cur_who_list = _assigned_list(row.get("assigned_to"))
+    default_who = [n for n in cur_who_list if n in assigned_opts] or ["LLC"]
+    new_who = c6.multiselect(
         "Assigned To", assigned_opts,
-        index=assigned_opts.index(cur_who) if cur_who in assigned_opts else 0,
+        default=default_who,
+        help="Select one or more members. Use for joint filings.",
     )
 
     new_year = None
@@ -276,7 +279,10 @@ def _add_modal(category: str, user_email: str, has_confirmation: bool) -> None:
         c3, c4 = st.columns(2)
         new_due = c3.date_input(due_label, value=None)
         from sa_rebuild.compliance.db import get_members
-        new_who = c4.selectbox("Assigned To", get_members())
+        new_who = c4.multiselect(
+            "Assigned To", get_members(), default=["LLC"],
+            help="Select one or more members. Use for joint filings.",
+        )
 
         new_year = None
         new_quarter = None
@@ -328,7 +334,7 @@ def _delete_modal(rows: list[dict], user_email: str) -> None:
         st.markdown(
             f"- **{r.get('filing_type', '')}** — "
             f"{r.get('quarter', r.get('period', ''))} — "
-            f"{r.get('assigned_to', '')} — due {r.get('due_date') or '—'}"
+            f"{_assigned_str(r.get('assigned_to'))} — due {r.get('due_date') or '—'}"
         )
     st.divider()
     confirm, cancel = st.columns(2)
@@ -359,7 +365,7 @@ def _history_modal(row: dict) -> None:
     st.markdown(
         f"**{row['filing_type']}** — "
         f"{row.get('quarter', row.get('period', ''))} — "
-        f"{row.get('assigned_to', '')}"
+        f"{_assigned_str(row.get('assigned_to'))}"
     )
     st.divider()
     from sa_rebuild.compliance.db import get_filing_history
@@ -375,6 +381,250 @@ def _history_modal(row: dict) -> None:
                 f"`{h.get('old_status')}` → `{h.get('new_status')}`"
                 + (f"  \n_{h.get('note')}_" if h.get("note") else "")
             )
+
+
+# ── Quick Reference dialogs ──────────────────────────────────────────────────
+
+@st.dialog("➕ Add Quick Reference Row")
+def _add_qref_modal(user_email: str) -> None:
+    with st.form("add_qref_form", clear_on_submit=True):
+        new_filing = st.text_input("Filing *")
+        c1, c2 = st.columns(2)
+        new_freq  = c1.selectbox("Frequency", _FREQUENCY_OPTIONS)
+        new_who   = c2.text_input("Who Files", placeholder="LLC / Members (joint) / ...")
+        new_due   = st.text_input("Due Date Pattern", placeholder="e.g. Jul 20 / Oct 20 / Jan 20 / Apr 20")
+        new_where = st.text_input("Where to File", placeholder="e.g. taxportal.nj.gov")
+        submitted = st.form_submit_button("Add", type="primary")
+    if submitted:
+        if not new_filing.strip():
+            st.error("Filing is required.")
+        else:
+            from sa_rebuild.compliance.db import add_quick_reference
+            add_quick_reference({
+                "filing":           new_filing.strip(),
+                "frequency":        new_freq,
+                "due_date_pattern": new_due.strip(),
+                "who_files":        new_who.strip(),
+                "where_to_file":    new_where.strip(),
+            }, user_email)
+            st.rerun()
+
+
+@st.dialog("✏️ Edit Quick Reference Row")
+def _edit_qref_modal(row: dict, user_email: str) -> None:
+    st.markdown(f"**{row.get('filing', '')}**")
+    st.divider()
+    new_filing = st.text_input("Filing", value=row.get("filing", ""))
+    c1, c2 = st.columns(2)
+    cur_freq = row.get("frequency", "Quarterly")
+    new_freq = c1.selectbox(
+        "Frequency", _FREQUENCY_OPTIONS,
+        index=_FREQUENCY_OPTIONS.index(cur_freq) if cur_freq in _FREQUENCY_OPTIONS else 0,
+    )
+    new_who   = c2.text_input("Who Files", value=row.get("who_files", ""))
+    new_due   = st.text_input("Due Date Pattern", value=row.get("due_date_pattern", ""))
+    new_where = st.text_input("Where to File", value=row.get("where_to_file", ""))
+    st.divider()
+    save, cancel = st.columns(2)
+    if save.button("💾 Save", type="primary", use_container_width=True, key="qref_save"):
+        if not new_filing.strip():
+            st.error("Filing is required.")
+        else:
+            from sa_rebuild.compliance.db import update_quick_reference
+            update_quick_reference(row["id"], {
+                "filing":           new_filing.strip(),
+                "frequency":        new_freq,
+                "due_date_pattern": new_due.strip(),
+                "who_files":        new_who.strip(),
+                "where_to_file":    new_where.strip(),
+            }, user_email)
+            st.rerun()
+    if cancel.button("Cancel", use_container_width=True, key="qref_cancel"):
+        st.rerun()
+
+
+@st.dialog("🗑️ Confirm Delete Quick Reference")
+def _delete_qref_modal(rows: list[dict]) -> None:
+    st.warning(f"Permanently delete **{len(rows)} row(s)**?")
+    for r in rows:
+        st.markdown(f"- **{r.get('filing','')}** — {r.get('frequency','')} — {r.get('due_date_pattern','')}")
+    st.divider()
+    confirm, cancel = st.columns(2)
+    if confirm.button("Yes, delete", type="primary", use_container_width=True, key="qref_del_confirm"):
+        from sa_rebuild.compliance.db import delete_quick_reference
+        for r in rows:
+            delete_quick_reference(r["id"])
+        st.rerun()
+    if cancel.button("Cancel", use_container_width=True, key="qref_del_cancel"):
+        st.rerun()
+
+
+# ── Key Websites dialogs ─────────────────────────────────────────────────────
+
+@st.dialog("➕ Add Key Website")
+def _add_site_modal(user_email: str) -> None:
+    with st.form("add_site_form", clear_on_submit=True):
+        new_name = st.text_input("Name *")
+        new_url  = st.text_input("URL *", placeholder="e.g. irs.gov/payments")
+        new_note = st.text_input("Note",  placeholder="What it's used for")
+        submitted = st.form_submit_button("Add", type="primary")
+    if submitted:
+        if not new_name.strip() or not new_url.strip():
+            st.error("Name and URL are required.")
+        else:
+            from sa_rebuild.compliance.db import add_key_website
+            add_key_website({
+                "name": new_name.strip(),
+                "url":  new_url.strip(),
+                "note": new_note.strip(),
+            }, user_email)
+            st.rerun()
+
+
+@st.dialog("✏️ Edit Key Website")
+def _edit_site_modal(row: dict, user_email: str) -> None:
+    st.markdown(f"**{row.get('name', '')}**")
+    st.divider()
+    new_name = st.text_input("Name", value=row.get("name", ""))
+    new_url  = st.text_input("URL",  value=row.get("url", ""))
+    new_note = st.text_input("Note", value=row.get("note", ""))
+    st.divider()
+    save, cancel = st.columns(2)
+    if save.button("💾 Save", type="primary", use_container_width=True, key="site_save"):
+        if not new_name.strip() or not new_url.strip():
+            st.error("Name and URL are required.")
+        else:
+            from sa_rebuild.compliance.db import update_key_website
+            update_key_website(row["id"], {
+                "name": new_name.strip(),
+                "url":  new_url.strip(),
+                "note": new_note.strip(),
+            }, user_email)
+            st.rerun()
+    if cancel.button("Cancel", use_container_width=True, key="site_cancel"):
+        st.rerun()
+
+
+@st.dialog("🗑️ Confirm Delete Website")
+def _delete_site_modal(rows: list[dict]) -> None:
+    st.warning(f"Permanently delete **{len(rows)} website(s)**?")
+    for r in rows:
+        st.markdown(f"- **{r.get('name','')}** — `{r.get('url','')}`")
+    st.divider()
+    confirm, cancel = st.columns(2)
+    if confirm.button("Yes, delete", type="primary", use_container_width=True, key="site_del_confirm"):
+        from sa_rebuild.compliance.db import delete_key_website
+        for r in rows:
+            delete_key_website(r["id"])
+        st.rerun()
+    if cancel.button("Cancel", use_container_width=True, key="site_del_cancel"):
+        st.rerun()
+
+
+# ── editable section renderers (Dashboard) ───────────────────────────────────
+
+def _render_quick_reference_section(user_email: str) -> None:
+    from sa_rebuild.compliance.db import (
+        get_quick_reference, ensure_order_quick_reference, move_quick_reference_rows,
+    )
+    rows = get_quick_reference()
+    ensure_order_quick_reference(rows)
+
+    tbl_state = st.session_state.get("tbl_qref", {})
+    prev_sel = tbl_state.get("selection", {}).get("rows", []) if isinstance(tbl_state, dict) else []
+    sel_idx  = sorted(i for i in prev_sel if i < len(rows))
+    sel_rows = [rows[i] for i in sel_idx]
+    n_sel    = len(sel_rows)
+    can_up   = bool(sel_idx and sel_idx[0] > 0)
+    can_dn   = bool(sel_idx and sel_idx[-1] < len(rows) - 1)
+
+    b1, b2, b3, b4, b5 = st.columns(5)
+    if b1.button("Edit", key="btn_edit_qref", disabled=n_sel != 1, use_container_width=True):
+        _edit_qref_modal(sel_rows[0], user_email)
+    if b2.button(f"Delete{f' ({n_sel})' if n_sel else ''}",
+                 key="btn_del_qref", disabled=n_sel == 0, use_container_width=True):
+        _delete_qref_modal(sel_rows)
+    if b3.button("+ Add", key="btn_add_qref", use_container_width=True):
+        _add_qref_modal(user_email)
+    if b4.button("↑ Up", key="btn_up_qref", disabled=not can_up, use_container_width=True):
+        group = [rows[i] for i in sel_idx]
+        upper = rows[sel_idx[0] - 1]
+        move_quick_reference_rows([upper] + group, group + [upper])
+        st.session_state["tbl_qref"] = {"selection": {"rows": [i - 1 for i in sel_idx], "columns": []}}
+        st.rerun()
+    if b5.button("↓ Down", key="btn_dn_qref", disabled=not can_dn, use_container_width=True):
+        group = [rows[i] for i in sel_idx]
+        lower = rows[sel_idx[-1] + 1]
+        move_quick_reference_rows(group + [lower], [lower] + group)
+        st.session_state["tbl_qref"] = {"selection": {"rows": [i + 1 for i in sel_idx], "columns": []}}
+        st.rerun()
+
+    df = pd.DataFrame([
+        {
+            "#":                  r.get("order", i),
+            "Filing":             r.get("filing", ""),
+            "Frequency":          r.get("frequency", ""),
+            "Due Date Pattern":   r.get("due_date_pattern", ""),
+            "Who Files":          r.get("who_files", ""),
+            "Where":              r.get("where_to_file", ""),
+        }
+        for i, r in enumerate(rows, 1)
+    ])
+    st.dataframe(
+        df, use_container_width=True, hide_index=True,
+        selection_mode="multi-row", on_select="rerun", key="tbl_qref",
+    )
+
+
+def _render_key_websites_section(user_email: str) -> None:
+    from sa_rebuild.compliance.db import (
+        get_key_websites, ensure_order_key_websites, move_key_website_rows,
+    )
+    rows = get_key_websites()
+    ensure_order_key_websites(rows)
+
+    tbl_state = st.session_state.get("tbl_sites", {})
+    prev_sel = tbl_state.get("selection", {}).get("rows", []) if isinstance(tbl_state, dict) else []
+    sel_idx  = sorted(i for i in prev_sel if i < len(rows))
+    sel_rows = [rows[i] for i in sel_idx]
+    n_sel    = len(sel_rows)
+    can_up   = bool(sel_idx and sel_idx[0] > 0)
+    can_dn   = bool(sel_idx and sel_idx[-1] < len(rows) - 1)
+
+    b1, b2, b3, b4, b5 = st.columns(5)
+    if b1.button("Edit", key="btn_edit_site", disabled=n_sel != 1, use_container_width=True):
+        _edit_site_modal(sel_rows[0], user_email)
+    if b2.button(f"Delete{f' ({n_sel})' if n_sel else ''}",
+                 key="btn_del_site", disabled=n_sel == 0, use_container_width=True):
+        _delete_site_modal(sel_rows)
+    if b3.button("+ Add", key="btn_add_site", use_container_width=True):
+        _add_site_modal(user_email)
+    if b4.button("↑ Up", key="btn_up_site", disabled=not can_up, use_container_width=True):
+        group = [rows[i] for i in sel_idx]
+        upper = rows[sel_idx[0] - 1]
+        move_key_website_rows([upper] + group, group + [upper])
+        st.session_state["tbl_sites"] = {"selection": {"rows": [i - 1 for i in sel_idx], "columns": []}}
+        st.rerun()
+    if b5.button("↓ Down", key="btn_dn_site", disabled=not can_dn, use_container_width=True):
+        group = [rows[i] for i in sel_idx]
+        lower = rows[sel_idx[-1] + 1]
+        move_key_website_rows(group + [lower], [lower] + group)
+        st.session_state["tbl_sites"] = {"selection": {"rows": [i + 1 for i in sel_idx], "columns": []}}
+        st.rerun()
+
+    df = pd.DataFrame([
+        {
+            "#":    r.get("order", i),
+            "Name": r.get("name", ""),
+            "URL":  r.get("url", ""),
+            "Note": r.get("note", ""),
+        }
+        for i, r in enumerate(rows, 1)
+    ])
+    st.dataframe(
+        df, use_container_width=True, hide_index=True,
+        selection_mode="multi-row", on_select="rerun", key="tbl_sites",
+    )
 
 
 # ── import ────────────────────────────────────────────────────────────────────
@@ -412,7 +662,7 @@ def _do_import(raw: bytes, category: str, user_email: str) -> None:
                 "status":              "Pending",
                 "date_filed":          None,
                 "confirmation_number": str(row.get("confirmation_number", "")).strip() or None,
-                "assigned_to":         str(row.get("assigned_to", "LLC")).strip(),
+                "assigned_to":         [n.strip() for n in str(row.get("assigned_to", "LLC")).split(",") if n.strip()] or ["LLC"],
                 "notes":               str(row.get("notes", "")).strip(),
             }, user_email)
             new_ids.add(new_id)
@@ -442,7 +692,10 @@ def _matches(value, selected: list) -> bool:
 
 def _render_filters(category: str, rows: list[dict]) -> list[dict]:
     years     = sorted({str(r["year"]) for r in rows if r.get("year")}, reverse=True)
-    assignees = sorted({r["assigned_to"] for r in rows if r.get("assigned_to")})
+    assignees: set[str] = set()
+    for r in rows:
+        assignees.update(_assigned_list(r.get("assigned_to")))
+    assignees = sorted(assignees)
     has_quarter = (category == "quarterly")
 
     # Header row: label on left, clear button on right
@@ -485,11 +738,16 @@ def _render_filters(category: str, rows: list[dict]) -> list[dict]:
             key=_fk(category, "quarter"),
         )
 
+    def _who_match(row_value, selected: list) -> bool:
+        if not selected:
+            return True
+        return any(n in selected for n in _assigned_list(row_value))
+
     return [
         r for r in rows
         if _matches(r.get("status"), sel_status)
         and _matches(str(r.get("year", "")), sel_years)
-        and _matches(r.get("assigned_to"), sel_who)
+        and _who_match(r.get("assigned_to"), sel_who)
         and _matches(r.get("quarter"), sel_quarter)
     ]
 
@@ -635,7 +893,7 @@ def _render_filing_tab(
 
 # ── dashboard ─────────────────────────────────────────────────────────────────
 
-def _render_dashboard() -> None:
+def _render_dashboard(user_email: str = "") -> None:
     q_rows  = _load("quarterly")
     a_rows  = _load("annual")
     ot_rows = _load("one_time")
@@ -672,8 +930,9 @@ def _render_dashboard() -> None:
         else:
             for r in sorted(overdue, key=lambda x: x.get("due_date") or date.max):
                 period = r.get("quarter") or r.get("period", "")
+                who = _assigned_str(r.get("assigned_to")) or "LLC"
                 st.markdown(
-                    f"**{r['filing_type']}** — {r.get('assigned_to','LLC')}  \n"
+                    f"**{r['filing_type']}** — {who}  \n"
                     f"Due: `{r.get('due_date')}`  |  {period}",
                 )
 
@@ -686,22 +945,21 @@ def _render_dashboard() -> None:
                 days_left = (r["due_date"] - today).days
                 label  = f"{days_left}d" if days_left > 0 else "today"
                 period = r.get("quarter") or r.get("period", "")
+                who = _assigned_str(r.get("assigned_to")) or "LLC"
                 st.markdown(
-                    f"**{r['filing_type']}** — {r.get('assigned_to','LLC')}  \n"
+                    f"**{r['filing_type']}** — {who}  \n"
                     f"Due: `{r.get('due_date')}` ({label})  |  {period}",
                 )
 
     st.divider()
     st.subheader("Filing Quick Reference")
-    ref_df = pd.DataFrame(
-        _QUICK_REF,
-        columns=["Filing", "Frequency", "Due Date Pattern", "Who Files", "Where"],
-    )
-    st.dataframe(ref_df, hide_index=True, use_container_width=True)
+    st.caption("Editable — add / edit / delete / reorder rows. Persists to Firestore.")
+    _render_quick_reference_section(user_email)
 
+    st.divider()
     st.subheader("Key Websites")
-    for name, url, note in _KEY_SITES:
-        st.markdown(f"- **{name}** — `{url}` — {note}")
+    st.caption("Editable — add / edit / delete / reorder rows. Persists to Firestore.")
+    _render_key_websites_section(user_email)
 
 
 # ── settings ─────────────────────────────────────────────────────────────────
@@ -925,7 +1183,7 @@ def main() -> None:
     )
 
     with tab_dash:
-        _render_dashboard()
+        _render_dashboard(user["email"])
 
     with tab_q:
         st.subheader("Quarterly Filings")

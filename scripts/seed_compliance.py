@@ -82,7 +82,8 @@ def parse_quarterly(ws) -> list[dict]:
             continue
         year = row.get("Year")
         quarter = str(row.get("Quarter") or "").strip()
-        assigned_to = str(row.get("Assigned To") or "LLC").strip() or "LLC"
+        assigned_raw = str(row.get("Assigned To") or "LLC").strip() or "LLC"
+        assigned_to = [n.strip() for n in assigned_raw.split(",") if n.strip()] or ["LLC"]
         doc_id = _slug("q", year, filing_type, quarter)
         records.append({
             "_id": doc_id,
@@ -109,7 +110,8 @@ def parse_annual(ws) -> list[dict]:
         if not filing:
             continue
         year = row.get("Year")
-        assigned_to = str(row.get("Assigned To") or "LLC").strip() or "LLC"
+        assigned_raw = str(row.get("Assigned To") or "LLC").strip() or "LLC"
+        assigned_to = [n.strip() for n in assigned_raw.split(",") if n.strip()] or ["LLC"]
         doc_id = _slug("a", year, filing)
         records.append({
             "_id": doc_id,
@@ -135,7 +137,8 @@ def parse_one_time(ws) -> list[dict]:
         item = str(row.get("Item") or "").strip()
         if not item:
             continue
-        assigned_to = str(row.get("Assigned To") or "LLC").strip() or "LLC"
+        assigned_raw = str(row.get("Assigned To") or "LLC").strip() or "LLC"
+        assigned_to = [n.strip() for n in assigned_raw.split(",") if n.strip()] or ["LLC"]
         doc_id = _slug("ot", item)
         conf_raw = row.get("Confirmation #")
         records.append({
