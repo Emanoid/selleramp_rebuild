@@ -184,7 +184,7 @@ def _build_records() -> list[dict]:
             "status": r.get("status", "Pending"),
             "date_filed": r.get("date_filed"),
             "confirmation_number": None,
-            "assigned_to": "LLC",
+            "assigned_to": ["LLC"],
             "notes": r.get("notes", ""),
             "order": i,
         })
@@ -200,7 +200,7 @@ def _build_records() -> list[dict]:
             "status": r.get("status", "Pending"),
             "date_filed": r.get("date_filed"),
             "confirmation_number": None,
-            "assigned_to": "LLC",
+            "assigned_to": ["LLC"],
             "notes": r.get("notes", ""),
             "order": i,
         })
@@ -216,7 +216,7 @@ def _build_records() -> list[dict]:
             "status": r.get("status", "Pending"),
             "date_filed": r.get("date_filed"),
             "confirmation_number": r.get("confirmation_number"),
-            "assigned_to": "LLC",
+            "assigned_to": ["LLC"],
             "notes": r.get("notes", ""),
             "order": i,
         })
