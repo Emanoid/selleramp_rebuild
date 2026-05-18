@@ -67,8 +67,9 @@ def _firebase_ready() -> bool:
 
 
 def _login_wall() -> Optional[dict]:
+    # LLC Compliance is admin-only — editors are blocked even when authenticated.
     from sa_rebuild.auth import login_wall
-    return login_wall("compliance_user", "LLC Compliance")
+    return login_wall("compliance_user", "LLC Compliance", required_role="admin")
 
 
 def _load(category: str) -> list[dict]:
@@ -1070,6 +1071,12 @@ def _render_settings_tab() -> None:
             else:
                 st.info("All assignees are already in the members list.")
 
+    st.divider()
+    st.subheader("User Accounts & Roles")
+    st.caption("All accounts and their assigned role.")
+    from sa_rebuild.auth import render_user_roles
+    render_user_roles()
+
 
 # ── main ──────────────────────────────────────────────────────────────────────
 
@@ -1140,22 +1147,9 @@ def main() -> None:
     st.html(_CSS)
     if not _firebase_ready():
         st.warning(
-            "**Firebase not configured.**  \n"
-            "Follow the setup steps in `compliance_tool_plan.md` to connect the database.  \n"
-            "You need `FIREBASE_WEB_API_KEY`, `FIREBASE_PROJECT_ID`, and a "
-            "`service_account.json` file (or `FIREBASE_SERVICE_ACCOUNT_JSON` secret)."
+            "**This tool isn't available yet.**  \n"
+            "The database hasn't been connected. Please contact the administrator."
         )
-        with st.expander("Setup checklist"):
-            st.markdown(
-                "1. Create a Firebase project at console.firebase.google.com\n"
-                "2. Enable Firestore Database (us-east1)\n"
-                "3. Enable Authentication → Email/Password\n"
-                "4. Create user accounts for each member\n"
-                "5. Generate service account key → save as `service_account.json`\n"
-                "6. Get Web API Key → add to `.env` as `FIREBASE_WEB_API_KEY`\n"
-                "7. Run `python scripts/seed_compliance.py path/to/tracker.xlsx`\n\n"
-                "Full instructions: `compliance_tool_plan.md`"
-            )
         st.stop()
         return
 
@@ -1164,7 +1158,10 @@ def main() -> None:
         return
 
     with st.sidebar:
-        st.markdown(f"**Logged in as**  \n{user['email']}")
+        st.markdown(
+            f"**Logged in as**  \n{user['email']}  \n`role: {user.get('role', 'admin')}`"
+        )
+        st.caption("Admin — full access to all filings.")
         if st.button("Sign out", key="compliance_signout"):
             del st.session_state["compliance_user"]
             st.rerun()

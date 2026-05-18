@@ -247,8 +247,14 @@ def get_company_info() -> dict:
     return doc.to_dict() or {}
 
 
+# Fields a caller may write to config/company; .set() replaces the whole doc,
+# so anything outside this set is dropped (fail-safe whitelist).
+_COMPANY_FIELDS = frozenset({"name", "formed"})
+
+
 def save_company_info(data: dict) -> None:
     """Create or overwrite the 'config/company' document."""
+    data = {k: v for k, v in data.items() if k in _COMPANY_FIELDS}
     get_db().collection("config").document("company").set(data)
 
 
