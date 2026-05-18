@@ -286,6 +286,8 @@ Live replacement for the Excel compliance tracker. Tracks every quarterly, annua
 2. Sign in with your email and password. Accounts are created by the admin in Firebase Console → Authentication — you cannot self-register.
 3. To sign out, click **Sign out** in the left sidebar at any time.
 
+LLC Compliance is **admin-only**: an authenticated account without the `admin` role is blocked at the login wall. See *Roles & access control* under For developers.
+
 #### Dashboard
 
 The dashboard loads automatically on sign-in. It shows:
@@ -458,8 +460,52 @@ FIREBASE_SERVICE_ACCOUNT_JSON = '''{"type":"service_account","project_id":"...fu
 | 2 | Enable **Firestore Database** (us-east1, production mode) |
 | 3 | Enable **Authentication** → Email/Password sign-in method |
 | 4 | Create a user account for each member in Authentication → Users |
-| 5 | Generate a service account key: Project Settings → Service Accounts → Generate new private key |
-| 6 | Copy the Web API Key from Project Settings → General |
+| 5 | **Disable self-signup:** Authentication → Settings → User actions → uncheck **Enable create (sign-up)**. Accounts can then only be created from the console. |
+| 6 | Generate a service account key: Project Settings → Service Accounts → Generate new private key |
+| 7 | Copy the Web API Key from Project Settings → General |
+| 8 | Assign each account a role: `python scripts/grant_role.py <email> <admin\|editor>` (see below) |
+
+#### Roles & access control
+
+Authentication alone grants nothing — every account also needs a **role**, stored
+as a Firebase Auth custom claim (a Google-signed JWT claim that the user cannot
+forge or change). `sa_rebuild.auth.login_wall` verifies the ID token server-side
+on sign-in and reads the claim; a missing/invalid claim falls back to `editor`
+(least privilege).
+
+| Role | Access |
+|---|---|
+| `admin` | LLC Compliance (full) + Finance Tracker (full, sees all data) |
+| `editor` | Finance Tracker only — sees and manages only rows they own (`owner_uid`); LLC Compliance and the Finance Settings tab are blocked |
+
+Assign or change roles with the Admin-SDK script (the only way — there is no
+in-app role UI):
+
+```bash
+python scripts/grant_role.py member@example.com admin
+python scripts/grant_role.py member@example.com editor
+# first-time setup: give existing finance data an owner
+python scripts/grant_role.py owner@example.com admin --backfill
+```
+
+`--backfill` stamps `owner_uid` onto pre-existing `finance_expenses` /
+`finance_income` documents so they belong to that admin; it is idempotent. Users
+must sign out and back in for a role change to take effect.
+
+Both apps' **Settings tab** shows a read-only *User Accounts & Roles* table —
+every Firebase account with its email, role, and UID — so an admin can review
+who has access without leaving the app. It is informational only; roles are
+still changed exclusively with `grant_role.py`.
+
+Because the apps use the Firebase **Admin SDK**, Firestore security rules do not
+apply to app traffic — these role checks in `sa_rebuild.auth` and
+`finance_tracker.db` are the enforcement layer. Keep a deny-all `firestore.rules`
+deployed so no client SDK can reach the database directly.
+
+The DB writers (`add_expense`, `update_expense`, `add_income`, `update_income`,
+`save_settings`, `save_company_info`) also **whitelist fields**: a caller's dict
+is filtered to an explicit allowed set before it is written, so server-managed
+fields (`owner_uid`, `order`, timestamps) and any unknown key cannot be injected.
 
 #### Firestore collections
 
@@ -932,8 +978,11 @@ Edit Tax Rate and Reinvest % inline — changes affect only this session until y
 
 | Collection | Document shape |
 |---|---|
-| `finance_expenses` | `type`, `item_description`, `unit_price`, `frequency`, `start_date`, `end_date`, `receipt_filename`, `notes`, `order`, `created_at`, `updated_at`, `updated_by` |
-| `finance_income` | `date`, `type`, `amount`, `notes`, `order`, `created_at`, `updated_at`, `updated_by` |
+| `finance_expenses` | `type`, `item_description`, `unit_price`, `frequency`, `start_date`, `end_date`, `receipt_filename`, `notes`, `order`, `owner_uid`, `created_at`, `updated_at`, `updated_by` |
+| `finance_income` | `date`, `type`, `amount`, `notes`, `order`, `owner_uid`, `created_at`, `updated_at`, `updated_by` |
+
+`owner_uid` is the Firebase uid of the account that created the row. Editors only
+see and mutate rows where `owner_uid` matches their uid; admins see all rows.
 | `finance_settings/finance_config` | `onedrive_receipts_path`, `income_types`, `members` (list of `{name, pct}`), `tax_rate`, `reinvest_pct` |
 
 #### Code layout
@@ -954,7 +1003,7 @@ src/sa_rebuild/
 
 #### Key architectural notes
 
-- **Shared auth module** — `sa_rebuild.auth.login_wall(session_key, app_name)` is used by both LLC Compliance and Finance Tracker. Each app passes its own `session_key` so sessions are independent.
+- **Shared auth module** — `sa_rebuild.auth.login_wall(session_key, app_name, required_role=None)` is used by both LLC Compliance and Finance Tracker. Each app passes its own `session_key` so sessions are independent. It verifies the Firebase ID token on sign-in, attaches the verified `role`, and blocks authenticated users who lack `required_role` (LLC Compliance passes `required_role="admin"`).
 - **Calculator logic** — `_compute_expense_for_range()` clips each expense's effective period to `[calc_start, calc_end]` before computing. This matches the Excel SUMPRODUCT formula for the recurring total. The Profit tab uses `_compute_profit_expenses()` which matches the Excel formula exactly (start_date ≥ profit_start AND eff_end ≤ profit_end, using pre-computed total_spent).
 - **Profit tab session state** — tax rate, reinvest %, and member %s are stored in `st.session_state` so edits survive rerenders without persisting to Firestore. "Save as Defaults" is the explicit save action.
 - **No module-level DB imports** — all `from sa_rebuild.finance_tracker.db import ...` calls are lazy, matching the pattern in LLC Compliance.

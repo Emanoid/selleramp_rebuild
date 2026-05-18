@@ -16,7 +16,7 @@ Never assume. Ask the user for clarification on every product decision before im
 Concise and direct. No sycophancy. No preamble. No "Great question!" No summaries of what you just did.
 
 ## Branch discipline
-All work on branch `feature/filing-reminders`. Never push or merge to `main`. Let the user do that manually.
+All work on branch separate branch. Never push or merge to `main`. Let the user do that manually.
 
 ## Session handoff
 When approaching the usage limit, append a `## Session Handoff` block to `plan.md` that contains exactly what was being worked on and the next steps — written so it can be pasted into a new session without wasting tokens re-gathering context.

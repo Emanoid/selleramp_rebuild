@@ -29,6 +29,10 @@ def _firebase_ready() -> bool:
         return False
 
 
+def _is_admin(user: dict) -> bool:
+    return (user or {}).get("role") == "admin"
+
+
 def _parse_date(val) -> Optional[date]:
     if val is None:
         return None
@@ -130,14 +134,14 @@ def _compute_profit_expenses(expenses: list[dict], profit_start: date, profit_en
 
 # ── data loaders ──────────────────────────────────────────────────────────────
 
-def _load_expenses() -> list[dict]:
+def _load_expenses(user: dict) -> list[dict]:
     from sa_rebuild.finance_tracker.db import get_expenses
-    return get_expenses()
+    return get_expenses(user)
 
 
-def _load_income() -> list[dict]:
+def _load_income(user: dict) -> list[dict]:
     from sa_rebuild.finance_tracker.db import get_income
-    return get_income()
+    return get_income(user)
 
 
 def _load_settings() -> dict:
@@ -224,7 +228,7 @@ def _render_income_filters(rows: list[dict], income_types: list[str]) -> list[di
 # ── expense dialogs ───────────────────────────────────────────────────────────
 
 @st.dialog("➕ Add Expense")
-def _add_expense_modal(user_email: str, onedrive_path: str) -> None:
+def _add_expense_modal(user: dict, onedrive_path: str) -> None:
     if onedrive_path:
         st.info(f"📁 Upload receipt to: `{onedrive_path}`")
     else:
@@ -265,12 +269,12 @@ def _add_expense_modal(user_email: str, onedrive_path: str) -> None:
                 "end_date":         new_end,
                 "receipt_filename": new_receipt.strip(),
                 "notes":            new_notes.strip(),
-            }, user_email)
+            }, user)
             st.rerun()
 
 
 @st.dialog("✏️ Edit Expense")
-def _edit_expense_modal(row: dict, user_email: str, onedrive_path: str) -> None:
+def _edit_expense_modal(row: dict, user: dict, onedrive_path: str) -> None:
     st.markdown(f"**{row.get('item_description', '')}**")
     if onedrive_path:
         st.info(f"📁 Upload receipt to: `{onedrive_path}`")
@@ -305,23 +309,27 @@ def _edit_expense_modal(row: dict, user_email: str, onedrive_path: str) -> None:
         else:
             from sa_rebuild.finance_tracker.db import update_expense
             freq_val = "Once" if new_type == "Static" else new_freq
-            update_expense(row["id"], {
-                "type":             new_type,
-                "item_description": new_desc.strip(),
-                "unit_price":       new_price,
-                "frequency":        freq_val,
-                "start_date":       new_start,
-                "end_date":         new_end,
-                "receipt_filename": new_receipt.strip(),
-                "notes":            new_notes.strip(),
-            }, user_email)
+            try:
+                update_expense(row["id"], {
+                    "type":             new_type,
+                    "item_description": new_desc.strip(),
+                    "unit_price":       new_price,
+                    "frequency":        freq_val,
+                    "start_date":       new_start,
+                    "end_date":         new_end,
+                    "receipt_filename": new_receipt.strip(),
+                    "notes":            new_notes.strip(),
+                }, user)
+            except PermissionError as exc:
+                st.error(str(exc))
+                return
             st.rerun()
     if cancel.button("Cancel", use_container_width=True, key="edit_exp_cancel"):
         st.rerun()
 
 
 @st.dialog("🗑️ Confirm Delete")
-def _delete_expense_modal(rows: list[dict]) -> None:
+def _delete_expense_modal(rows: list[dict], user: dict) -> None:
     st.warning(f"Permanently delete **{len(rows)} expense(s)**?")
     for r in rows:
         st.markdown(
@@ -332,8 +340,12 @@ def _delete_expense_modal(rows: list[dict]) -> None:
     confirm, cancel = st.columns(2)
     if confirm.button("Yes, delete", type="primary", use_container_width=True, key="del_exp_confirm"):
         from sa_rebuild.finance_tracker.db import delete_expense
-        for r in rows:
-            delete_expense(r["id"])
+        try:
+            for r in rows:
+                delete_expense(r["id"], user)
+        except PermissionError as exc:
+            st.error(str(exc))
+            return
         st.rerun()
     if cancel.button("Cancel", use_container_width=True, key="del_exp_cancel"):
         st.rerun()
@@ -342,7 +354,7 @@ def _delete_expense_modal(rows: list[dict]) -> None:
 # ── income dialogs ────────────────────────────────────────────────────────────
 
 @st.dialog("➕ Add Income")
-def _add_income_modal(user_email: str, income_types: list[str]) -> None:
+def _add_income_modal(user: dict, income_types: list[str]) -> None:
     with st.form("add_income_form", clear_on_submit=True):
         c1, c2    = st.columns(2)
         new_date  = c1.date_input("Date *", value=date.today())
@@ -361,12 +373,12 @@ def _add_income_modal(user_email: str, income_types: list[str]) -> None:
                 "type":   new_type,
                 "amount": new_amount,
                 "notes":  new_notes.strip(),
-            }, user_email)
+            }, user)
             st.rerun()
 
 
 @st.dialog("✏️ Edit Income")
-def _edit_income_modal(row: dict, user_email: str, income_types: list[str]) -> None:
+def _edit_income_modal(row: dict, user: dict, income_types: list[str]) -> None:
     st.markdown(f"**${float(row.get('amount') or 0):.2f}** — {row.get('type', '')}")
     st.divider()
     c1, c2    = st.columns(2)
@@ -385,19 +397,23 @@ def _edit_income_modal(row: dict, user_email: str, income_types: list[str]) -> N
             st.error("Amount must be > 0.")
         else:
             from sa_rebuild.finance_tracker.db import update_income
-            update_income(row["id"], {
-                "date":   new_date,
-                "type":   new_type,
-                "amount": new_amount,
-                "notes":  new_notes.strip(),
-            }, user_email)
+            try:
+                update_income(row["id"], {
+                    "date":   new_date,
+                    "type":   new_type,
+                    "amount": new_amount,
+                    "notes":  new_notes.strip(),
+                }, user)
+            except PermissionError as exc:
+                st.error(str(exc))
+                return
             st.rerun()
     if cancel.button("Cancel", use_container_width=True, key="edit_inc_cancel"):
         st.rerun()
 
 
 @st.dialog("🗑️ Confirm Delete")
-def _delete_income_modal(rows: list[dict]) -> None:
+def _delete_income_modal(rows: list[dict], user: dict) -> None:
     st.warning(f"Permanently delete **{len(rows)} income record(s)**?")
     for r in rows:
         st.markdown(
@@ -408,8 +424,12 @@ def _delete_income_modal(rows: list[dict]) -> None:
     confirm, cancel = st.columns(2)
     if confirm.button("Yes, delete", type="primary", use_container_width=True, key="del_inc_confirm"):
         from sa_rebuild.finance_tracker.db import delete_income
-        for r in rows:
-            delete_income(r["id"])
+        try:
+            for r in rows:
+                delete_income(r["id"], user)
+        except PermissionError as exc:
+            st.error(str(exc))
+            return
         st.rerun()
     if cancel.button("Cancel", use_container_width=True, key="del_inc_cancel"):
         st.rerun()
@@ -486,10 +506,10 @@ def _render_dashboard(expenses: list[dict], income: list[dict], settings: dict) 
     st.dataframe(df, hide_index=True, use_container_width=True)
 
 
-def _render_expenses_tab(user_email: str, settings: dict) -> None:
+def _render_expenses_tab(user: dict, settings: dict) -> None:
     from sa_rebuild.finance_tracker.db import ensure_order_expenses, move_expense_rows
 
-    expenses    = _load_expenses()
+    expenses    = _load_expenses(user)
     ensure_order_expenses(expenses)
     onedrive    = settings.get("onedrive_receipts_path", "")
 
@@ -530,12 +550,12 @@ def _render_expenses_tab(user_email: str, settings: dict) -> None:
 
     b1, b2, b3, b4, b5 = st.columns(5)
     if b1.button("Edit",   key="btn_edit_exp", disabled=n_sel != 1, use_container_width=True):
-        _edit_expense_modal(sel_rows[0], user_email, onedrive)
+        _edit_expense_modal(sel_rows[0], user, onedrive)
     if b2.button(f"Delete{f' ({n_sel})' if n_sel else ''}",
                  key="btn_del_exp", disabled=n_sel == 0, use_container_width=True):
-        _delete_expense_modal(sel_rows)
+        _delete_expense_modal(sel_rows, user)
     if b3.button("+ Add",  key="btn_add_exp", use_container_width=True):
-        _add_expense_modal(user_email, onedrive)
+        _add_expense_modal(user, onedrive)
     if b4.button("↑ Up",   key="btn_up_exp", disabled=not can_up, use_container_width=True):
         group = [filtered[i] for i in sel_idx]
         upper = filtered[sel_idx[0] - 1]
@@ -566,10 +586,10 @@ def _render_expenses_tab(user_email: str, settings: dict) -> None:
     )
 
 
-def _render_income_tab(user_email: str, settings: dict) -> None:
+def _render_income_tab(user: dict, settings: dict) -> None:
     from sa_rebuild.finance_tracker.db import ensure_order_income, move_income_rows
 
-    income       = _load_income()
+    income       = _load_income(user)
     ensure_order_income(income)
     income_types = settings.get("income_types", ["Income after Fees", "Reimbursement", "Other"])
 
@@ -606,12 +626,12 @@ def _render_income_tab(user_email: str, settings: dict) -> None:
 
     b1, b2, b3, b4, b5 = st.columns(5)
     if b1.button("Edit",   key="btn_edit_inc", disabled=n_sel != 1, use_container_width=True):
-        _edit_income_modal(sel_rows[0], user_email, income_types)
+        _edit_income_modal(sel_rows[0], user, income_types)
     if b2.button(f"Delete{f' ({n_sel})' if n_sel else ''}",
                  key="btn_del_inc", disabled=n_sel == 0, use_container_width=True):
-        _delete_income_modal(sel_rows)
+        _delete_income_modal(sel_rows, user)
     if b3.button("+ Add",  key="btn_add_inc", use_container_width=True):
-        _add_income_modal(user_email, income_types)
+        _add_income_modal(user, income_types)
     if b4.button("↑ Up",   key="btn_up_inc", disabled=not can_up, use_container_width=True):
         group = [filtered[i] for i in sel_idx]
         upper = filtered[sel_idx[0] - 1]
@@ -641,7 +661,7 @@ def _render_income_tab(user_email: str, settings: dict) -> None:
 
 
 def _render_profit_tab(
-    expenses: list[dict], income: list[dict], settings: dict, user_email: str
+    expenses: list[dict], income: list[dict], settings: dict, user: dict
 ) -> None:
     today = date.today()
 
@@ -750,15 +770,19 @@ def _render_profit_tab(
         st.session_state["ft_members"] = members
 
         st.divider()
-        col_save, col_reset = st.columns(2)
-        if col_save.button("💾 Save as Defaults", key="btn_save_profit_def", use_container_width=True):
-            from sa_rebuild.finance_tracker.db import save_settings
-            s = _load_settings()
-            s["tax_rate"]     = st.session_state["ft_tax_rate"]
-            s["reinvest_pct"] = st.session_state["ft_reinvest_pct"]
-            s["members"]      = st.session_state["ft_members"]
-            save_settings(s)
-            st.success("Saved as defaults.")
+        # "Save as Defaults" writes the shared finance_settings doc — admin only.
+        if _is_admin(user):
+            col_save, col_reset = st.columns(2)
+            if col_save.button("💾 Save as Defaults", key="btn_save_profit_def", use_container_width=True):
+                from sa_rebuild.finance_tracker.db import save_settings
+                s = _load_settings()
+                s["tax_rate"]     = st.session_state["ft_tax_rate"]
+                s["reinvest_pct"] = st.session_state["ft_reinvest_pct"]
+                s["members"]      = st.session_state["ft_members"]
+                save_settings(s)
+                st.success("Saved as defaults.")
+        else:
+            col_reset = st.columns(1)[0]
         if col_reset.button("↺ Reset to Defaults", key="btn_reset_profit", use_container_width=True):
             st.session_state["ft_profit_ver"] = st.session_state.get("ft_profit_ver", 0) + 1
             for k in ["ft_tax_rate", "ft_reinvest_pct", "ft_members"]:
@@ -768,7 +792,14 @@ def _render_profit_tab(
             st.rerun()
 
 
-def _render_settings_tab(user_email: str) -> None:
+def _render_settings_tab(user: dict) -> None:
+    if not _is_admin(user):
+        st.info(
+            "⚙️ Settings is restricted to admin accounts. "
+            "Income types, receipt path, and profit defaults are company-wide."
+        )
+        return
+
     from sa_rebuild.finance_tracker.db import get_settings, save_settings
 
     settings = get_settings()
@@ -907,6 +938,15 @@ def _render_settings_tab(user_email: str) -> None:
                     st.session_state.pop("ft_members", None)
                     st.rerun()
 
+        st.divider()
+        st.markdown("**User Accounts & Roles**")
+        st.caption(
+            "All accounts and their assigned role. "
+            "Admins see all data; editors see only their own entries."
+        )
+        from sa_rebuild.auth import render_user_roles
+        render_user_roles()
+
 
 # ── CSS ───────────────────────────────────────────────────────────────────────
 
@@ -993,9 +1033,8 @@ def main() -> None:
 
     if not _firebase_ready():
         st.warning(
-            "**Firebase not configured.**  \n"
-            "Finance Tracker uses the same Firebase project as LLC Compliance.  \n"
-            "Follow the setup instructions in README → LLC Compliance → For developers."
+            "**This tool isn't available yet.**  \n"
+            "The database hasn't been connected. Please contact the administrator."
         )
         st.stop()
         return
@@ -1006,7 +1045,11 @@ def main() -> None:
         return
 
     with st.sidebar:
-        st.markdown(f"**Logged in as**  \n{user['email']}")
+        st.markdown(
+            f"**Logged in as**  \n{user['email']}  \n`role: {user.get('role', 'editor')}`"
+        )
+        if not _is_admin(user):
+            st.caption("Editor — you see and manage only your own entries.")
         if st.button("Sign out", key="ft_signout"):
             del st.session_state["finance_user"]
             st.rerun()
@@ -1016,8 +1059,8 @@ def main() -> None:
     st.caption("Central Line Group LLC — Revenue, Expenses & Profit")
 
     settings = _load_settings()
-    expenses = _load_expenses()
-    income   = _load_income()
+    expenses = _load_expenses(user)
+    income   = _load_income(user)
 
     tab_dash, tab_exp, tab_inc, tab_profit, tab_cfg = st.tabs(
         ["📊 Dashboard", "💸 Expenses", "💵 Amazon Income", "📈 Amazon Profit", "⚙️ Settings"]
@@ -1027,16 +1070,16 @@ def main() -> None:
         _render_dashboard(expenses, income, settings)
 
     with tab_exp:
-        _render_expenses_tab(user["email"], settings)
+        _render_expenses_tab(user, settings)
 
     with tab_inc:
-        _render_income_tab(user["email"], settings)
+        _render_income_tab(user, settings)
 
     with tab_profit:
-        _render_profit_tab(expenses, income, settings, user["email"])
+        _render_profit_tab(expenses, income, settings, user)
 
     with tab_cfg:
-        _render_settings_tab(user["email"])
+        _render_settings_tab(user)
 
 
 main()
